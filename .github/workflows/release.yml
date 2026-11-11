@@ -1,0 +1,58 @@
+name: Build & Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: npx electron-builder --win --x64 --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: 'dist/*.exe' }
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Android SDK packages
+        run: |
+          SDKM=$(ls -d $ANDROID_HOME/cmdline-tools/*/bin | head -1)/sdkmanager
+          yes | $SDKM --licenses >/dev/null || true
+          $SDKM "build-tools;34.0.0" "platforms;android-34" >/dev/null
+      - name: Build APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS_SECRET: ${{ secrets.ANDROID_KS_PASS }}
+        run: |
+          cd android
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > release.jks; export KEYSTORE=$PWD/release.jks KS_PASS=$KS_PASS_SECRET; fi
+          chmod +x build-apk.sh
+          BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar OUT=build ./build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: android/build/Nova-AI-Hub.apk }
+  release:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out }
+      - run: |
+          mv out/android/Nova-AI-Hub.apk "out/Nova-AI-Hub-${GITHUB_REF_NAME}.apk"
+          ls -R out
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Nova AI Hub ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            out/windows/*.exe
+            out/*.apk

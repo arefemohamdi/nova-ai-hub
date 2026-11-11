@@ -1,0 +1,29 @@
+{
+  "name": "nova-ai-hub",
+  "productName": "Nova AI Hub",
+  "version": "1.0.0",
+  "description": "Nova AI Hub - every AI in one place: multi-provider chat, image & video generation, AI coding workspace, free models. Persian/English.",
+  "main": "server.js",
+  "author": "arefemohamdi",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "electron desktop/main.js",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "electron": "45.3.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.nova.aihub",
+    "productName": "Nova AI Hub",
+    "extraMetadata": { "main": "desktop/main.js" },
+    "files": ["server.js", "presets.js", "public/**/*", "desktop/**/*", "package.json"],
+    "directories": { "output": "dist" },
+    "win": { "target": ["nsis", "portable"], "icon": "desktop/icon.ico" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "Nova AI Hub", "artifactName": "Nova-AI-Hub-Setup-${version}.exe" },
+    "portable": { "artifactName": "Nova-AI-Hub-Portable-${version}.exe" }
+  }
+}

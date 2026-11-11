@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nova AI Hub</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0a0b12; color: #e9ebf5; font-family: system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  body::before { content: ''; position: fixed; top: -30%; right: -30%; width: 600px; height: 600px; background: radial-gradient(circle, rgba(124,92,255,.22), transparent 60%); pointer-events: none; }
+  .card { position: relative; width: 100%; max-width: 440px; background: #131622; border: 1px solid rgba(255,255,255,.08); border-radius: 24px; padding: 28px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .logo { width: 72px; height: 72px; border-radius: 22px; margin: 0 auto 16px; background: linear-gradient(135deg, #8b5cf6, #6366f1 50%, #06b6d4); display: grid; place-items: center; box-shadow: 0 14px 40px rgba(124,92,255,.45); }
+  .logo svg { width: 38px; height: 38px; }
+  h1 { text-align: center; margin: 0 0 6px; font-size: 22px; }
+  p { color: #a2a8c3; line-height: 1.9; font-size: 14px; margin: 0 0 18px; text-align: center; }
+  label { display: block; font-size: 13px; color: #a2a8c3; margin-bottom: 8px; font-weight: 600; }
+  input { width: 100%; direction: ltr; text-align: left; background: #191d2c; border: 1px solid rgba(255,255,255,.12); color: #fff; border-radius: 14px; padding: 14px; font-size: 16px; outline: none; }
+  input:focus { border-color: #7c5cff; box-shadow: 0 0 0 3px rgba(124,92,255,.2); }
+  button { width: 100%; margin-top: 14px; border: 0; border-radius: 14px; padding: 15px; font-size: 16px; font-weight: 700; color: #fff; background: linear-gradient(135deg, #8b5cf6, #6366f1 50%, #06b6d4); }
+  .ghost { background: #191d2c; color: #a2a8c3; font-weight: 600; font-size: 14px; }
+  .err { display: none; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); color: #fca5a5; border-radius: 12px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; line-height: 1.8; }
+  .help { margin-top: 18px; font-size: 12.5px; color: #6c7392; line-height: 2; }
+  code { direction: ltr; unicode-bidi: isolate; background: #20253a; padding: 2px 6px; border-radius: 6px; color: #c9cfea; font-size: 12px; }
+  .lang { position: absolute; top: 14px; left: 14px; width: auto; margin: 0; padding: 6px 12px; font-size: 12px; background: #20253a; }
+</style>
+</head>
+<body>
+<div class="card">
+  <button class="lang" id="lang">EN</button>
+  <div class="logo"><svg viewBox="0 0 64 64"><path d="M32 8l5 14 14 5-14 5-5 14-5-14-14-5 14-5z" fill="#fff"/></svg></div>
+  <h1 id="t1">نوا AI هاب</h1>
+  <p id="t2">آدرس سرور نوا را وارد کن تا پرووایدرها، مدل‌ها و گفتگوهایت اینجا هم در دسترس باشند.</p>
+  <div class="err" id="err"></div>
+  <label id="t3">آدرس سرور</label>
+  <input id="url" type="url" inputmode="url" placeholder="http://192.168.1.10:3000" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button id="go">اتصال</button>
+  <button class="ghost" id="retry" style="display:none">تلاش دوباره</button>
+  <div class="help" id="help"></div>
+</div>
+<script>
+  var T = {
+    fa: { t1: 'نوا AI هاب', t2: 'آدرس سرور نوا را وارد کن تا پرووایدرها، مدل‌ها و گفتگوهایت اینجا هم در دسترس باشند.', t3: 'آدرس سرور', go: 'اتصال', retry: 'تلاش دوباره', err: 'به سرور وصل نشد. مطمئن شو سرور روشن است و گوشی و کامپیوتر در یک شبکه هستند.', bad: 'آدرس معتبر نیست', help: 'روی کامپیوتر نسخه ویندوز یا سورس را اجرا کن با:<br><code>HOST=0.0.0.0 APP_PASSWORD=رمز node server.js</code><br>سپس آدرس <code>http://IP-کامپیوتر:3000</code> را اینجا بزن. یا آدرس سروری که نوا را روی آن نصب کرده‌ای.' },
+    en: { t1: 'Nova AI Hub', t2: 'Enter your Nova server address to use your providers, models and chats here too.', t3: 'Server address', go: 'Connect', retry: 'Try again', err: 'Could not reach the server. Make sure it is running and your phone is on the same network.', bad: 'Invalid address', help: 'On your computer run Nova with:<br><code>HOST=0.0.0.0 APP_PASSWORD=secret node server.js</code><br>then enter <code>http://YOUR-PC-IP:3000</code> here, or the address of a server where Nova is hosted.' }
+  };
+  var lang = localStorage.getItem('nova.setupLang') || 'fa';
+  function apply() {
+    var d = T[lang]; document.documentElement.lang = lang; document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+    ['t1', 't2', 't3'].forEach(function (k) { document.getElementById(k).textContent = d[k]; });
+    document.getElementById('go').textContent = d.go; document.getElementById('retry').textContent = d.retry;
+    document.getElementById('help').innerHTML = d.help; document.getElementById('lang').textContent = lang === 'fa' ? 'EN' : 'فا';
+    document.getElementById('err').textContent = d.err;
+  }
+  document.getElementById('lang').onclick = function () { lang = lang === 'fa' ? 'en' : 'fa'; localStorage.setItem('nova.setupLang', lang); apply(); };
+  var input = document.getElementById('url');
+  var saved = window.NovaAndroid ? NovaAndroid.getServer() : '';
+  if (saved) input.value = saved;
+  if (location.search.indexOf('error=1') >= 0) { document.getElementById('err').style.display = 'block'; if (saved) document.getElementById('retry').style.display = 'block'; }
+  document.getElementById('retry').onclick = function () { location.href = saved; };
+  function connect() {
+    var u = input.value.trim(); if (!u) return;
+    if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
+    try { new URL(u); } catch (e) { alert(T[lang].bad); return; }
+    if (window.NovaAndroid) NovaAndroid.saveServer(u); else location.href = u;
+  }
+  document.getElementById('go').onclick = connect;
+  input.onkeydown = function (e) { if (e.key === 'Enter') connect(); };
+  apply();
+</script>
+</body>
+</html>
