@@ -82,7 +82,7 @@ const shortName = m => m ? (m.name && m.name !== m.id && m.name.length < 48 ? m.
 
 // ------------------------------------------------------------ shell
 const NAV_ALL = [['chat', 'chat'], ['code', 'code'], ['studio', 'wand'], ['providers', 'plug'], ['models', 'cube'], ['free', 'gift'], ['gallery', 'gallery'], ['prompts', 'book'], ['admin', 'activity'], ['settings', 'settings']];
-const ADMIN_ROUTES = ['providers', 'models', 'free', 'admin'];
+const ADMIN_ROUTES = ['providers', 'models', 'admin'];
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
 let NAV = NAV_ALL;
 function renderShell() {
@@ -826,10 +826,54 @@ function renderModels() {
 }
 
 // ------------------------------------------------------------ FREE
-async function renderFree() {
-  $('#main').innerHTML = `<div class="page">${pageHead(t('freeTitle'), t('freeSub'), `<button class="btn" id="frRefresh">${icon('refresh')}</button>`)}<div id="freeBody"><div class="grid">${Array.from({ length: 6 }).map(() => '<div class="gen-placeholder" style="aspect-ratio:auto;height:150px"></div>').join('')}</div></div></div>`;
+// free models found on the providers you added yourself (custom + presets); rescan pulls the provider's list again
+function freeMineHtml() {
+  const provs = S.providers.filter(p => isAdmin() ? (p.type !== 'pollinations' && p.hasKey) : (p.models || []).some(m => m.free || p.type === 'pollinations'));
+  if (!provs.length) return isAdmin() ? `<div class="section-title">${icon('plug')} ${t('freeMine')}</div><div class="card dim">${t('freeMineEmpty')}</div>` : `<div class="card dim">${t('freeNoneUser')}</div>`;
+  const preset = id => S.presets.find(x => x.id === id) || {};
+  return `<div class="section-title" style="flex-wrap:wrap">${icon('plug')} ${t('freeMine')} ${isAdmin() ? `<span class="grow"></span><button class="btn sm" id="frScanAll">${icon('refresh')}${t('freeScanAll')}</button>` : ''}</div>
+    ${provs.map(p => {
+      const fm = (p.models || []).filter(m => (m.free || p.type === 'pollinations') && (m.caps.chat || m.caps.image || m.caps.video));
+      const pr = preset(p.preset);
+      return `<div class="card free-prov" style="margin-bottom:14px"><div class="row" style="flex-wrap:wrap;gap:8px"><span class="plogo" style="width:30px;height:30px;font-size:12px;border-radius:9px;background:${pColor(p)}">${esc(p.name.slice(0, 1))}</span><b>${esc(p.name)}</b><span class="badge">${fm.length} ${t('cap_free')}</span>${p.enabled === false ? `<span class="badge bad">${t('disabled')}</span>` : ''}<span class="grow"></span>${p.freeScanAt ? `<span class="dim" style="font-size:11px">${new Date(p.freeScanAt).toLocaleString(S.settings.lang === 'fa' ? 'fa-IR' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}</span>` : ''}${isAdmin() ? `<button class="btn sm" data-scan="${p.id}">${icon('refresh')}${t('freeScan')}</button>` : ''}</div>
+        ${fm.length ? `<div class="grid" style="margin-top:12px">${fm.map(m => `<div class="card free-card" style="padding:12px"><div><b dir="auto" style="display:block;font-size:13.5px">${esc(m.name || m.id)}</b><div class="mname">${esc(m.id)}</div></div>${capChips(m.caps, true)}<div class="row"><span class="grow"></span><button class="btn sm primary" data-usemine="${esc(p.id + '::' + m.id)}">${icon('zap')}${t('useNow')}</button></div></div>`).join('')}</div>`
+          : `<p class="dim" style="margin:10px 0 0;font-size:12.5px;line-height:1.9">${p.freeScanAt ? t('freeNoneFound') : t('freeNotScanned')}${pr.freeTier ? ' · ' + esc(pr.freeTier) : ''}</p>`}</div>`;
+    }).join('')}`;
+}
+function bindFreeMine() {
+  const scan = async (ids, btn) => {
+    if (btn) { btn.disabled = true; btn.innerHTML = '…'; }
+    const res = await Promise.all(ids.map(id => api('/providers/' + id + '/fetch-models', { method: 'POST' }).then(r => r.fetched, e => ({ error: e.message }))));
+    await loadState();
+    const n = res.reduce((a, r) => a + ((r && r.free) || 0), 0), bad = res.find(r => r && r.error);
+    toast(bad ? bad.error : t('freeFound', { n }), bad ? 'bad' : 'ok');
+    if (S.route === 'free') renderFree(true);
+  };
+  $$('[data-scan]').forEach(b => b.onclick = () => scan([b.dataset.scan], b));
+  if ($('#frScanAll')) $('#frScanAll').onclick = () => scan(S.providers.filter(p => p.type !== 'pollinations' && p.hasKey).map(p => p.id), $('#frScanAll'));
+  $$('[data-usemine]').forEach(b => b.onclick = async () => {
+    const key = b.dataset.usemine; const [pid, ...rest] = key.split('::'); const mid = rest.join('::');
+    const p = S.providers.find(x => x.id === pid); const m = p && p.models.find(x => x.id === mid); if (!m) return;
+    if (isAdmin()) {
+      if (m.enabled === false) await api('/providers/' + pid + '/models', { method: 'POST', body: { action: 'update', id: mid, enabled: true } });
+      if (p.enabled === false) await api('/providers/' + pid, { method: 'PUT', body: { enabled: true } });
+      await loadState();
+    }
+    if (m.caps.chat) { S.selectedKey = key; localStorage.setItem('nova.model', key); go('chat'); }
+    else { S.studioTab = m.caps.image ? 'image' : 'video'; S.studioKey[S.studioTab] = key; go('studio'); }
+  });
+  return scan;
+}
+async function renderFree(noAutoScan) {
+  $('#main').innerHTML = `<div class="page">${pageHead(t('freeTitle'), t('freeSub'), isAdmin() ? `<button class="btn" id="frRefresh">${icon('refresh')}</button>` : '')}<div id="freeMine">${freeMineHtml()}</div><div id="freeBody">${isAdmin() ? `<div class="grid">${Array.from({ length: 6 }).map(() => '<div class="gen-placeholder" style="aspect-ratio:auto;height:150px"></div>').join('')}</div>` : ''}</div></div>`;
+  const scan = bindFreeMine();
+  if (!isAdmin()) return;
+  // providers that were never scanned for free models get scanned once automatically
+  const fresh = S.providers.filter(p => p.type !== 'pollinations' && p.hasKey && !p.freeScanAt);
+  if (fresh.length && !noAutoScan) scan(fresh.map(p => p.id));
   $('#frRefresh').onclick = () => { S.free = null; renderFree(); };
   try { if (!S.free) S.free = await api('/free-models'); } catch (e) { $('#freeBody').innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
+  if (S.route !== 'free' || !$('#freeBody')) return;
   const F = S.free;
   const orProv = S.providers.find(p => p.preset === 'openrouter' && p.hasKey);
   const card = (m, src) => `<div class="card free-card"><div class="row"><span class="plogo" style="width:34px;height:34px;font-size:13px;border-radius:10px;background:${src === 'pollinations' ? '#0ea5e9' : '#6467f2'}">${src === 'pollinations' ? 'P' : 'O'}</span><div class="grow"><b dir="auto" style="display:block;font-size:14px">${esc(m.name)}</b><div class="mname">${esc(m.id)}</div></div></div>
@@ -1233,11 +1277,13 @@ async function renderAuth(mode) {
   closeEvents();
   let info = {}; try { info = await (await fetch('/api/auth/info', { headers: CH })).json(); } catch { }
   if (info.lang && !S.settings) { S.settings = { lang: info.lang, theme: 'dark' }; applyLook(); }
-  mode = info.setupNeeded ? 'setup' : (mode || 'login');
+  mode = info.setupNeeded ? (mode === 'have' ? 'have' : 'setup') : (mode === 'have' ? 'login' : (mode || 'login'));
+  if (mode === 'have') return renderHaveAccount(info);
   const canReg = !info.setupNeeded && info.registration && info.registration !== 'closed';
   $('#app').innerHTML = `<div class="auth-wrap"><div class="card auth-card">
     <div class="welcome" style="margin:0 0 18px"><div class="orb">${icon(mode === 'setup' ? 'key' : 'lock')}</div><h2>${t('appName')}</h2><p>${mode === 'setup' ? t('setupSub') : mode === 'register' ? t('registerSub') : t('loginSub')}</p></div>
     ${mode === 'login' && canReg ? `<div class="seg auth-seg"><button class="active">${t('login')}</button><button id="toReg">${t('register')}</button></div>` : mode === 'register' ? `<div class="seg auth-seg"><button id="toLogin">${t('login')}</button><button class="active">${t('register')}</button></div>` : ''}
+    ${mode === 'setup' ? `<div class="seg auth-seg"><button class="active">${t('createAdmin')}</button><button id="toHave">${t('login')}</button></div>` : ''}
     ${mode !== 'login' ? `<label class="lbl">${t('displayName')}</label><input class="input" id="aName" autocomplete="name">` : ''}
     <label class="lbl">${t('username')}</label><input class="input ltr" id="aUser" autocomplete="username" autocapitalize="off" spellcheck="false">
     <label class="lbl">${t('password')}</label><input class="input ltr" type="password" id="aPass" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}">
@@ -1248,6 +1294,7 @@ async function renderAuth(mode) {
     <div class="dim" style="text-align:center;margin-top:14px;font-size:12px">v${esc(info.version || '')}</div></div></div>`;
   if ($('#toReg')) $('#toReg').onclick = () => renderAuth('register');
   if ($('#toLogin')) $('#toLogin').onclick = () => renderAuth('login');
+  if ($('#toHave')) $('#toHave').onclick = () => renderAuth('have');
   if ($('#aConn')) $('#aConn').onclick = () => desktopConnDialog();
   if ($('#aSrv')) $('#aSrv').onclick = () => window.NovaAndroid.resetServer();
   const submit = async () => {
@@ -1264,6 +1311,30 @@ async function renderAuth(mode) {
   $('#aGo').onclick = submit;
   $$('.auth-card input').forEach(i => i.onkeydown = e => { if (e.key === 'Enter') submit(); });
   setTimeout(() => ($('#aName') || $('#aUser')).focus(), 50);
+}
+// this server/app has no account yet, but the user already made one on another server: connect to it and sign in there
+function renderHaveAccount(info) {
+  const desk = window.novaDesktop && window.novaDesktop.setConnection, andr = window.NovaAndroid;
+  const last = localStorage.getItem('nova.lastServer') || '';
+  $('#app').innerHTML = `<div class="auth-wrap"><div class="card auth-card">
+    <div class="welcome" style="margin:0 0 18px"><div class="orb">${icon('lock')}</div><h2>${t('appName')}</h2><p>${t('haveAccSub')}</p></div>
+    <div class="seg auth-seg"><button id="toSetup">${t('createAdmin')}</button><button class="active">${t('login')}</button></div>
+    <p class="dim" style="font-size:12.5px;line-height:1.9;margin:0 0 6px">${t('haveAccHint')}</p>
+    <label class="lbl">${t('serverUrl')}</label><input class="input ltr" id="hvUrl" placeholder="https://nova.example.com" value="${esc(last)}" autocapitalize="off" spellcheck="false">
+    <button class="btn primary" id="hvGo" style="width:100%;margin-top:16px">${icon('globe')}${t('haveAccGo')}</button>
+    <div class="dim" style="text-align:center;margin-top:14px;font-size:12px">v${esc(info.version || '')}</div></div></div>`;
+  $('#toSetup').onclick = () => renderAuth('setup');
+  const go = async () => {
+    let url = $('#hvUrl').value.trim().replace(/\/+$/, '');
+    if (url && !/^https?:\/\//.test(url)) url = 'http://' + url;
+    if (!/^https?:\/\/.+/.test(url)) return toast(t('badUrl'), 'bad');
+    localStorage.setItem('nova.lastServer', url);
+    if (desk) { const r = await window.novaDesktop.setConnection({ mode: 'remote', url }); if (r && r.error) toast(r.error, 'bad'); }
+    else if (andr) window.NovaAndroid.saveServer(url);
+    else location.href = url;
+  };
+  $('#hvGo').onclick = go;
+  $('#hvUrl').onkeydown = e => { if (e.key === 'Enter') go(); };
 }
 function renderMaintenance(msg) {
   $('#app').innerHTML = `<div class="auth-wrap"><div class="card auth-card" style="text-align:center"><div class="welcome" style="margin:0"><div class="orb">${icon('settings')}</div><h2>${t('maintTitle')}</h2><p>${esc(msg || t('maintSub'))}</p></div>

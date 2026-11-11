@@ -1,7 +1,7 @@
 {
   "name": "nova-ai-hub",
   "productName": "Nova AI Hub",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Nova AI Hub - every AI in one place: multi-provider chat, image & video generation, AI coding workspace, free models. Persian/English.",
   "main": "server.js",
   "author": "arefemohamdi",

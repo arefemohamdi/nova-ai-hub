@@ -9,7 +9,7 @@ const TXT = {
     welcome: name => `سلام ${name} 👋\nبه <b>نوا AI هاب</b> خوش اومدی.\nهر سؤالی داری بنویس، عکس یا فایل بفرست، یا از منوی پایین مدل رو عوض کن و عکس بساز.`,
     menu: { chat: '💬 گفتگوی جدید', model: '🤖 انتخاب مدل', image: '🎨 ساخت تصویر', imodel: '🖼 مدل تصویر', lang: '🌐 English', help: '❓ راهنما' },
     newChat: '✨ گفتگوی جدید شروع شد. پیامت رو بنویس.',
-    pickProvider: 'یک سرویس انتخاب کن:', pickModel: p => `مدل‌های <b>${p}</b>:`, picked: m => `✅ مدل انتخاب شد: <b>${m}</b>`,
+    pickProvider: 'یک سرویس انتخاب کن:', freeBtn: '🎁 مدل‌های رایگان', freeTitle: n => `🎁 مدل‌های رایگان (${n}):`, noFree: '🎁 فعلاً مدل رایگانی پیدا نشد.', pickModel: p => `مدل‌های <b>${p}</b>:`, picked: m => `✅ مدل انتخاب شد: <b>${m}</b>`,
     pickedImg: m => `✅ مدل تصویر: <b>${m}</b>`, noModels: 'هنوز هیچ مدلی در وب‌اپ اضافه نشده.', noImageModel: 'هیچ مدل ساخت تصویری پیدا نشد.',
     askImage: '🎨 توضیح تصویری که می‌خوای رو بنویس:', making: '⏳ در حال ساخت تصویر…', thinking: '⏳ …',
     current: (m, im) => `مدل گفتگو: <b>${m || '—'}</b>\nمدل تصویر: <b>${im || '—'}</b>`,
@@ -27,6 +27,7 @@ const TXT = {
       pickPreset: 'کدام سرویس را اضافه کنم؟', askKey: n => `🔑 کلید API سرویس <b>${n}</b> را بفرست.\n(پیامت بعد از خواندن پاک می‌شود)`, askUrl: '🌐 آدرس Base URL سرویس را بفرست (مثلاً https://api.example.com/v1):', adding: '⏳ در حال افزودن و دریافت مدل‌ها…',
       added: (n, r) => `✅ <b>${n}</b> اضافه شد.` + (r ? `\nمدل‌ها: ${r.total} (تصویر ${r.image}، ویدیو ${r.video}، دید ${r.vision})` : ''), addErr: e => `⚠️ اضافه شد اما دریافت مدل‌ها خطا داد: ${e}`,
       askBroadcast: '📣 متن پیام همگانی را بفرست (برای همه کاربران تلگرام و برنامه‌ها ارسال می‌شود):', sent: n => `✅ برای ${n} نفر در تلگرام ارسال شد.`,
+      freeScan: '🎁 بارگذاری مدل‌های رایگان', freeScanned: (n, list) => `🎁 ${n} مدل رایگان پیدا شد${list ? ':\n' + list : '.'}`,
       provInfo: (p, n) => `🔌 <b>${p.name}</b>\nوضعیت: ${p.enabled !== false ? '🟢 فعال' : '⚪️ غیرفعال'}\nمدل‌ها: ${n}`, toggle: on => on ? '⏸ غیرفعال کن' : '▶️ فعال کن', refetch: '🔄 دریافت دوباره مدل‌ها', del: '🗑 حذف', delQ: n => `«${n}» حذف شود؟`, yes: '✅ بله، حذف کن', deleted: '🗑 حذف شد.', fetched: r => `🔄 ${r.total} مدل (${r.added} جدید)`,
       userInfo: u => `👤 <b>${u.name}</b> (@${u.username})\nنقش: ${u.role === 'admin' ? 'ادمین' : 'کاربر'} · وضعیت: ${u.status}\nامروز: ${u.today.msgs} پیام، ${u.today.images} تصویر`, ban: '⛔️ مسدود کن', unban: '✅ فعال کن', approve: '✅ تأیید', noUsers: 'کاربری نیست.',
       statsText: o => `📊 <b>آمار امروز</b>\nپیام: ${o.today.msgs} · تصویر: ${o.today.images} · ویدیو: ${o.today.videos}\n\n👥 کاربران: ${o.users.total} (فعال ۲۴ساعت: ${o.users.active24h}، منتظر تأیید: ${o.users.pending}، مسدود: ${o.users.banned})\n📱 فعال در ۲۴ ساعت: وب ${o.platformsActive.web} · ویندوز ${o.platformsActive.windows} · اندروید ${o.platformsActive.android} · تلگرام ${o.platformsActive.telegram}` }
@@ -35,7 +36,7 @@ const TXT = {
     welcome: name => `Hi ${name} 👋\nWelcome to <b>Nova AI Hub</b>.\nAsk anything, send a photo or a file, or use the menu to switch models and generate images.`,
     menu: { chat: '💬 New chat', model: '🤖 Choose model', image: '🎨 Generate image', imodel: '🖼 Image model', lang: '🌐 فارسی', help: '❓ Help' },
     newChat: '✨ New chat started. Send your message.',
-    pickProvider: 'Pick a provider:', pickModel: p => `<b>${p}</b> models:`, picked: m => `✅ Model selected: <b>${m}</b>`,
+    pickProvider: 'Pick a provider:', freeBtn: '🎁 Free models', freeTitle: n => `🎁 Free models (${n}):`, noFree: '🎁 No free models found yet.', pickModel: p => `<b>${p}</b> models:`, picked: m => `✅ Model selected: <b>${m}</b>`,
     pickedImg: m => `✅ Image model: <b>${m}</b>`, noModels: 'No models have been added in the web app yet.', noImageModel: 'No image generation model found.',
     askImage: '🎨 Describe the image you want:', making: '⏳ Generating image…', thinking: '⏳ …',
     current: (m, im) => `Chat model: <b>${m || '—'}</b>\nImage model: <b>${im || '—'}</b>`,
@@ -53,6 +54,7 @@ const TXT = {
       pickPreset: 'Which provider should I add?', askKey: n => `🔑 Send the API key for <b>${n}</b>.\n(Your message is deleted after reading)`, askUrl: '🌐 Send the Base URL (e.g. https://api.example.com/v1):', adding: '⏳ Adding and fetching models…',
       added: (n, r) => `✅ <b>${n}</b> added.` + (r ? `\nModels: ${r.total} (image ${r.image}, video ${r.video}, vision ${r.vision})` : ''), addErr: e => `⚠️ Added, but fetching models failed: ${e}`,
       askBroadcast: '📣 Send the broadcast text (goes to every Telegram user and every open app):', sent: n => `✅ Sent to ${n} Telegram users.`,
+      freeScan: '🎁 Load free models', freeScanned: (n, list) => `🎁 ${n} free models found${list ? ':\n' + list : '.'}`,
       provInfo: (p, n) => `🔌 <b>${p.name}</b>\nStatus: ${p.enabled !== false ? '🟢 on' : '⚪️ off'}\nModels: ${n}`, toggle: on => on ? '⏸ Disable' : '▶️ Enable', refetch: '🔄 Fetch models again', del: '🗑 Delete', delQ: n => `Delete "${n}"?`, yes: '✅ Yes, delete', deleted: '🗑 Deleted.', fetched: r => `🔄 ${r.total} models (${r.added} new)`,
       userInfo: u => `👤 <b>${u.name}</b> (@${u.username})\nRole: ${u.role} · Status: ${u.status}\nToday: ${u.today.msgs} msgs, ${u.today.images} images`, ban: '⛔️ Disable', unban: '✅ Enable', approve: '✅ Approve', noUsers: 'No users.',
       statsText: o => `📊 <b>Today</b>\nMessages: ${o.today.msgs} · Images: ${o.today.images} · Videos: ${o.today.videos}\n\n👥 Users: ${o.users.total} (active 24h: ${o.users.active24h}, pending: ${o.users.pending}, disabled: ${o.users.banned})\n📱 Active 24h: web ${o.platformsActive.web} · Windows ${o.platformsActive.windows} · Android ${o.platformsActive.android} · Telegram ${o.platformsActive.telegram}` }
@@ -143,7 +145,26 @@ module.exports = function createBot(ctx) {
     const provs = getDb().providers.filter(p => p.enabled !== false && (p.models || []).some(m => okModel(p, m) && (m.caps || {})[filter]));
     if (!provs.length) return { text: filter === 'image' ? T.noImageModel : T.noModels };
     const rows = []; for (let i = 0; i < provs.length; i += 2) rows.push(provs.slice(i, i + 2).map(p => ({ text: p.name, callback_data: 'x' + tok({ a: 'prov', pid: p.id, filter, page: 0 }) })));
+    if (freeModels(filter).length) rows.push([{ text: T.freeBtn, callback_data: 'x' + tok({ a: 'free', filter, page: 0 }) }]);
     return { text: T.pickProvider, reply_markup: { inline_keyboard: rows } };
+  }
+  // free models from every provider (custom ones included) the user is allowed to use
+  function freeModels(filter) {
+    const out = [];
+    getDb().providers.filter(p => p.enabled !== false).forEach(p => (p.models || []).forEach(m => { if (okModel(p, m) && (m.free || p.type === 'pollinations') && (m.caps || {})[filter]) out.push({ p, m }); }));
+    return out;
+  }
+  function freeMenu(u, filter, page) {
+    const T = TXT[u.lang]; const list = freeModels(filter);
+    if (!list.length) return { text: T.noFree, reply_markup: { inline_keyboard: [[{ text: T.back, callback_data: 'x' + tok({ a: 'provs', filter }) }]] } };
+    const cur = filter === 'image' ? u.imageModel : u.model;
+    const rows = list.slice(page * PAGE, page * PAGE + PAGE).map(({ p, m }) => [{ text: (cur === p.id + '::' + m.id ? '✅ ' : '') + ((m.name || m.id) + ' · ' + p.name).slice(0, 60), callback_data: 'x' + tok({ a: 'set', key: p.id + '::' + m.id, filter }) }]);
+    const nav = [];
+    if (page > 0) nav.push({ text: T.prev, callback_data: 'x' + tok({ a: 'free', filter, page: page - 1 }) });
+    nav.push({ text: T.back, callback_data: 'x' + tok({ a: 'provs', filter }) });
+    if ((page + 1) * PAGE < list.length) nav.push({ text: T.more, callback_data: 'x' + tok({ a: 'free', filter, page: page + 1 }) });
+    rows.push(nav);
+    return { text: T.freeTitle(list.length), reply_markup: { inline_keyboard: rows } };
   }
   function modelMenu(u, pid, filter, page) {
     const T = TXT[u.lang]; const p = providerById(pid);
@@ -387,6 +408,7 @@ module.exports = function createBot(ctx) {
     if (v.a && v.a.startsWith('adm')) return account.role === 'admin' ? adminCallback(u, account, chatId, v, edit) : null;
     if (v.a === 'provs') return edit(providerMenu(u, v.filter));
     if (v.a === 'prov') return edit(modelMenu(u, v.pid, v.filter, v.page));
+    if (v.a === 'free') return edit(freeMenu(u, v.filter, v.page));
     if (v.a === 'set') {
       const mm = findModel(v.key); if (!mm) return;
       if (v.filter === 'image') u.imageModel = v.key; else { u.model = v.key; u.chatId = null; }
@@ -453,10 +475,18 @@ module.exports = function createBot(ctx) {
       return edit({ text: A.providers, reply_markup: { inline_keyboard: rows } });
     }
     const prov = v.id && providerById(v.id);
-    const provView = p => ({ text: A.provInfo({ name: esc(p.name), enabled: p.enabled }, (p.models || []).length), reply_markup: { inline_keyboard: [[btn(A.toggle(p.enabled !== false), { a: 'adm_ptog', id: p.id }), btn(A.refetch, { a: 'adm_pfetch', id: p.id })], [btn(A.del, { a: 'adm_pdelq', id: p.id })], back(tu, 'adm_provs')] } });
+    const provView = p => ({ text: A.provInfo({ name: esc(p.name), enabled: p.enabled }, (p.models || []).length), reply_markup: { inline_keyboard: [[btn(A.toggle(p.enabled !== false), { a: 'adm_ptog', id: p.id }), btn(A.refetch, { a: 'adm_pfetch', id: p.id })], [btn(A.freeScan, { a: 'adm_pfree', id: p.id })], [btn(A.del, { a: 'adm_pdelq', id: p.id })], back(tu, 'adm_provs')] } });
     if (v.a === 'adm_prov' && prov) return edit(provView(prov));
     if (v.a === 'adm_ptog' && prov) { prov.enabled = prov.enabled === false; saveDb(); changed.providers(); return edit(provView(prov)); }
     if (v.a === 'adm_pfetch' && prov) { try { const r = await mergeModels(prov); changed.providers(); const view = provView(prov); view.text += '\n\n' + A.fetched(r); return edit(view); } catch (e) { const view = provView(prov); view.text += '\n\n⚠️ ' + esc(e.message); return edit(view); } }
+    if (v.a === 'adm_pfree' && prov) {
+      try {
+        await mergeModels(prov); changed.providers();
+        const fm = (prov.models || []).filter(m => m.free || prov.type === 'pollinations');
+        const view = provView(prov); view.text += '\n\n' + A.freeScanned(fm.length, fm.slice(0, 25).map(m => '• <code>' + esc(m.id) + '</code>').join('\n') + (fm.length > 25 ? '\n…' : ''));
+        return edit(view);
+      } catch (e) { const view = provView(prov); view.text += '\n\n⚠️ ' + esc(e.message); return edit(view); }
+    }
     if (v.a === 'adm_pdelq' && prov) return edit({ text: A.delQ(esc(prov.name)), reply_markup: { inline_keyboard: [[btn(A.yes, { a: 'adm_pdel', id: prov.id })], back(tu, 'adm_provs')] } });
     if (v.a === 'adm_pdel' && prov) { getDb().providers = getDb().providers.filter(x => x.id !== prov.id); saveDb(); changed.providers(); acc.log('provider.delete', account, { name: prov.name, platform: 'telegram' }); return edit({ text: A.deleted, reply_markup: { inline_keyboard: [back(tu, 'adm_provs')] } }); }
     if (v.a === 'adm_users') {

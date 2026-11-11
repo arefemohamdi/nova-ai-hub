@@ -179,9 +179,20 @@ async function listModels(p) {
     const id = m.id || m.name || m.model;
     const arch = m.architecture || {};
     const meta = { input: arch.input_modalities, output: arch.output_modalities, kind: m.type === 'image' ? 'image' : m.type === 'video' ? 'video' : null };
-    const free = m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : /:free$/.test(id);
+    const free = isFreeModel(m, id);
     return { id, name: m.name || m.display_name || id, caps: detectCaps(id, meta), free, context: m.context_length || m.context_window };
   }).filter(m => m.id);
+}
+
+// a model is free when the provider says so: zero pricing, a free flag, or "free" in its id/name (OpenRouter style ":free")
+function isFreeModel(m, id) {
+  if (m.free === true || m.is_free === true || /^free$/i.test(m.tier || m.pricing_tier || '')) return true;
+  const pr = m.pricing;
+  if (pr && typeof pr === 'object') {
+    const vals = ['prompt', 'completion', 'input', 'output', 'request', 'image'].map(k => pr[k]).filter(v => v !== undefined && v !== null && v !== '');
+    if (vals.length && vals.every(v => Number(v) === 0)) return true;
+  }
+  return /(:|[-_ /(])free\b/i.test(String(id || '') + ' ' + String(m.name || ''));
 }
 
 // ---------------------------------------------------------------- chat streaming
@@ -914,8 +925,8 @@ async function mergeModels(prov) {
     return old && old.manual ? old : Object.assign({ enabled: true }, m, old ? { enabled: old.enabled, favorite: old.favorite } : {});
   });
   prov.models.filter(m => m.manual && !list.find(x => x.id === m.id)).forEach(m => merged.unshift(m));
-  prov.models = merged; prov.fetchedAt = Date.now(); saveDb();
-  return { total: merged.length, added, image: merged.filter(m => m.caps.image).length, video: merged.filter(m => m.caps.video).length, vision: merged.filter(m => m.caps.vision).length };
+  prov.models = merged; prov.fetchedAt = Date.now(); prov.freeScanAt = Date.now(); saveDb();
+  return { total: merged.length, added, free: merged.filter(m => m.free).length, image: merged.filter(m => m.caps.image).length, video: merged.filter(m => m.caps.video).length, vision: merged.filter(m => m.caps.vision).length };
 }
 
 // fill the built-in free provider on first start
