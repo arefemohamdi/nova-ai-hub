@@ -68,7 +68,17 @@ android/         نسخه اندروید
 ```
 
 ## ربات تلگرام
-به‌زودی: ربات به همین سرور وصل می‌شود و همه‌چیز بین ربات و وب‌اپ مشترک است.
+ربات داخل همین سرور اجرا می‌شود و با وب‌اپ یک داده‌ی مشترک دارد: پرووایدرها، مدل‌ها و گفتگوها (گفتگوهای تلگرام در وب‌اپ با علامت ✈️ دیده می‌شوند).
+
+1. در تلگرام به `@BotFather` برو، `/newbot` بزن و توکن را بگیر.
+2. در برنامه: **تنظیمات ← ربات تلگرام**، توکن را بزن و «اتصال و روشن کردن ربات» را بزن.
+3. نوع دسترسی را انتخاب کن: با رمز، فقط افراد مشخص (شناسه یا یوزرنیم)، یا همه. سقف پیام روزانه هم قابل تنظیم است.
+
+یا با متغیر محیطی: `TELEGRAM_BOT_TOKEN=... TELEGRAM_PASSWORD=... node server.js`
+
+امکانات ربات: گفتگو با همه‌ی مدل‌ها (پاسخ زنده)، انتخاب مدل با دکمه، ساخت تصویر (`/image`)، تحلیل عکس با مدل‌های دارای دید، فرستادن فایل متنی و کد، فارسی/انگلیسی.
+
+> ربات فقط وقتی کار می‌کند که سرور روشن باشد (روی PC، یا بهتر روی یک VPS). اگر سرور به `api.telegram.org` دسترسی ندارد، در بخش «پیشرفته» آدرس یک پروکسی بگذار.
 
 ---
-**English** — Nova AI Hub is a self-hosted, zero-dependency AI hub: add any provider (or a custom OpenAI/Anthropic/Gemini-compatible endpoint), fetch models with one click, auto-detect image/video capabilities, chat with every model, generate images & videos, and code with an AI agent that writes files straight into a folder you pick (VS Code-style explorer, editor and terminal). Windows and Android builds are in [Releases](../../releases). License: MIT.
+**English** — Nova AI Hub is a self-hosted, zero-dependency AI hub: add any provider (or a custom OpenAI/Anthropic/Gemini-compatible endpoint), fetch models with one click, auto-detect image/video capabilities, chat with every model, generate images & videos, and code with an AI agent that writes files straight into a folder you pick (VS Code-style explorer, editor and terminal). A built-in Telegram bot (Settings → Telegram bot) shares the same providers, models and chats. Windows and Android builds are in [Releases](../../releases). License: MIT.

@@ -579,9 +579,9 @@ const server = http.createServer(async (req, res) => {
 
     // ---- state
     if (parts[0] === 'state' && M === 'GET') {
-      return send(res, 200, { fsEnabled: FS_ENABLED, platform: process.platform, settings: db.settings, providers: db.providers.map(publicProvider), presets: PRESETS, prompts: db.prompts, chats: db.chats.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned, model: c.model, wsRoot: c.wsRoot })), mediaCount: db.media.length });
+      return send(res, 200, { fsEnabled: FS_ENABLED, platform: process.platform, settings: Object.assign({}, db.settings, { telegram: undefined }), providers: db.providers.map(publicProvider), presets: PRESETS, prompts: db.prompts, chats: db.chats.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned, model: c.model, wsRoot: c.wsRoot })), mediaCount: db.media.length });
     }
-    if (parts[0] === 'settings' && M === 'PUT') { const b = await readBody(req); Object.assign(db.settings, b); saveDb(); return send(res, 200, db.settings); }
+    if (parts[0] === 'settings' && M === 'PUT') { const b = await readBody(req); delete b.telegram; Object.assign(db.settings, b); saveDb(); return send(res, 200, Object.assign({}, db.settings, { telegram: undefined })); }
 
     // ---- providers
     if (parts[0] === 'providers') {
@@ -724,11 +724,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (parts[0] === 'ws') return await handleWs(parts, M, req, res, u);
+    if (parts[0] === 'telegram') {
+      if (M === 'GET') return send(res, 200, bot.status());
+      if (M === 'PUT' || M === 'POST') return send(res, 200, await bot.configure(await readBody(req)));
+    }
 
     // ---- backup
     if (parts[0] === 'export' && M === 'GET') {
       const full = u.searchParams.get('keys') === '1';
-      const out = { exportedAt: new Date().toISOString(), settings: db.settings, prompts: db.prompts, providers: db.providers.map(p => full ? p : Object.assign({}, p, { apiKey: '' })), chats: db.chats };
+      const out = { exportedAt: new Date().toISOString(), settings: full ? db.settings : Object.assign({}, db.settings, { telegram: undefined }), prompts: db.prompts, providers: db.providers.map(p => full ? p : Object.assign({}, p, { apiKey: '' })), chats: db.chats };
       res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="nova-ai-hub-backup.json"' });
       return res.end(JSON.stringify(out, null, 2));
     }
@@ -767,6 +771,13 @@ async function mergeModels(prov) {
   const pol = providerById('pollinations');
   if (pol && !pol.models.length) { try { await mergeModels(pol); } catch { } }
 })();
+
+// ---------------------------------------------------------------- Telegram bot (shares this server's data)
+const bot = require('./bot')({ getDb: () => db, saveDb, providerById, streamChat, generateImage, uid, MEDIA_DIR });
+if (process.env.TELEGRAM_BOT_TOKEN && !(db.settings.telegram && db.settings.telegram.token)) {
+  db.settings.telegram = Object.assign({ access: process.env.TELEGRAM_ACCESS || 'password', password: process.env.TELEGRAM_PASSWORD || '' }, db.settings.telegram || {}, { token: process.env.TELEGRAM_BOT_TOKEN, enabled: true });
+}
+bot.start();
 
 const ready = new Promise(resolve => {
   server.listen(PORT, HOST, () => {

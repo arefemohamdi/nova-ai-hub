@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 : "${BUILD_TOOLS:?set BUILD_TOOLS}"; : "${ANDROID_JAR:?set ANDROID_JAR}"
 export PATH="$JAVA_HOME/bin:$PATH"
-VERSION_NAME="${VERSION_NAME:-1.0.0}"; VERSION_CODE="${VERSION_CODE:-1}"
+VERSION_NAME="${VERSION_NAME:-1.1.0}"; VERSION_CODE="${VERSION_CODE:-2}"
 OUT="${OUT:-build}"
 rm -rf "$OUT" && mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
 

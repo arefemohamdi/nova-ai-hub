@@ -978,10 +978,10 @@ function renderSettings() {
     ${window.NovaAndroid ? `<div class="section-title">${icon('globe')} ${t('serverUrl')}</div><div class="card"><div class="row"><span class="grow" dir="ltr">${esc(location.origin)}</span><button class="btn" id="chgSrv">${t('changeServer')}</button></div></div>` : ''}
     <div class="section-title">${icon('download')} ${t('backup')}</div>
     <div class="card"><div class="row" style="flex-wrap:wrap"><a class="btn" href="/api/export">${icon('download')}${t('exportCfg')}</a><a class="btn" href="/api/export?keys=1">${icon('key')}${t('exportKeys')}</a><button class="btn" id="imp">${icon('upload')}${t('importCfg')}</button><input type="file" id="impF" accept=".json" hidden></div></div>
-    <div class="section-title">${icon('telegram')} ${t('telegram')} <span class="badge grad">${t('comingSoon')}</span></div>
-    <div class="card"><p class="muted" style="margin:0;line-height:1.9">${t('telegramSub')}</p></div>
+    <div class="section-title">${icon('telegram')} ${t('telegram')}</div>
+    <div class="card" id="tgCard"><div class="dim">…</div></div>
     <div class="section-title">${icon('sparkles')} ${t('about')}</div>
-    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v1.0</div></div></div>
+    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v1.1</div></div></div>
     <p class="muted" style="line-height:1.9;margin-bottom:0">${t('shortcuts')}: <code>Ctrl+K</code> ${t('selectModel')} · <code>Ctrl+Shift+O</code> ${t('newChat')}</p></div></div>`;
   $$('[data-lang]').forEach(b => b.onclick = async () => { await saveSettings({ lang: b.dataset.lang }); renderShell(); });
   $$('[data-theme]').forEach(b => b.onclick = async () => { await saveSettings({ theme: b.dataset.theme }); renderShell(); });
@@ -990,8 +990,40 @@ function renderSettings() {
   $('#temp').onchange = e => saveSettings({ temperature: +e.target.value });
   $('#saveSys').onclick = async () => { await saveSettings({ systemPrompt: $('#defSys').value }); toast(t('saved'), 'ok'); };
   if ($('#chgSrv')) $('#chgSrv').onclick = () => window.NovaAndroid.resetServer();
+  renderTelegramCard();
   $('#imp').onclick = () => $('#impF').click();
   $('#impF').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await api('/import', { method: 'POST', body: JSON.parse(await f.text()) }); await loadState(); toast(t('saved'), 'ok'); renderShell(); } catch (er) { toast(er.message, 'bad'); } };
+}
+
+// ------------------------------------------------------------ telegram bot settings
+async function renderTelegramCard(st) {
+  const el = $('#tgCard'); if (!el) return;
+  try { st = st || await api('/telegram'); } catch (e) { el.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
+  const status = st.running ? `<span class="badge ok">● ${t('tgRunning')}</span> <a class="btn sm" href="https://t.me/${esc(st.username)}" target="_blank" rel="noopener" dir="ltr">${icon('telegram')}@${esc(st.username)}</a>`
+    : st.error ? `<span class="badge bad">${t('tgError')}</span> <span class="dim" dir="ltr" style="font-size:12px">${esc(st.error)}</span>` : `<span class="badge">${t('tgStopped')}</span>`;
+  el.innerHTML = `<p class="muted" style="margin:0 0 14px;line-height:1.9">${t('tgIntro')}</p>
+    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">${status}</div>
+    <div class="set-row"><div class="grow"><b>${t('tgToken')}</b><small>${t('tgTokenHint')}</small><input class="input ltr" id="tgTok" type="password" placeholder="123456789:AA..." value="${esc(st.token)}" style="margin-top:8px"></div></div>
+    <div class="set-row"><div><b>${t('tgAccess')}</b></div><div class="seg" id="tgAcc">${['password', 'list', 'all'].map(a => `<button data-a="${a}" class="${st.access === a ? 'active' : ''}">${t('tgAcc_' + a)}</button>`).join('')}</div></div>
+    <div class="set-row tg-opt" data-for="password"><div class="grow"><b>${t('tgPass')}</b><small>${t('tgPassHint')}</small><input class="input" id="tgPass" type="password" value="${st.hasPassword ? '••••' : ''}" style="margin-top:8px"></div></div>
+    <div class="set-row tg-opt" data-for="list"><div class="grow"><b>${t('tgAllowed')}</b><small>${t('tgAllowedHint')}</small><textarea class="textarea ltr" id="tgAllowed" rows="3" style="margin-top:8px">${esc((st.allowed || []).join('\n'))}</textarea></div></div>
+    <div class="set-row"><div><b>${t('tgLimit')}</b><small>${t('tgLimitHint')}</small></div><input class="input" id="tgLimit" type="number" min="0" value="${st.dailyLimit || 0}" style="width:110px"></div>
+    <details style="margin:10px 0"><summary class="dim" style="cursor:pointer">${t('advanced')}</summary><div class="set-row"><div class="grow"><b>${t('tgApiBase')}</b><small>${t('tgApiBaseHint')}</small><input class="input ltr" id="tgBase" placeholder="https://api.telegram.org" value="${esc(st.apiBase || '')}" style="margin-top:8px"></div></div></details>
+    <div class="row" style="flex-wrap:wrap"><button class="btn primary" id="tgSave">${icon('zap')}${st.enabled ? t('tgSaveRestart') : t('tgConnect')}</button>${st.enabled ? `<button class="btn" id="tgOff">${icon('stop')}${t('tgDisable')}</button>` : ''}<button class="btn ghost" id="tgRef">${icon('refresh')}</button></div>
+    ${(st.users || []).length ? `<div class="section-title" style="margin-top:20px;font-size:13px">${icon('bot')} ${t('tgUsers')} (${st.users.length})</div><div class="tg-users">${st.users.map(u => `<div class="row"><b>${esc(u.name || '—')}</b>${u.username ? `<span class="dim" dir="ltr">@${esc(u.username)}</span>` : ''}<span class="grow"></span><code dir="ltr">${esc(u.id)}</code></div>`).join('')}</div>` : ''}`;
+  let access = st.access;
+  const showOpts = () => $$('.tg-opt', el).forEach(r => r.style.display = r.dataset.for === access ? '' : 'none');
+  showOpts();
+  $$('#tgAcc button', el).forEach(b => b.onclick = () => { access = b.dataset.a; $$('#tgAcc button', el).forEach(x => x.classList.toggle('active', x === b)); showOpts(); });
+  $('#tgSave', el).onclick = async () => {
+    const btn = $('#tgSave', el); btn.disabled = true; btn.innerHTML = "…";
+    try {
+      const r = await api('/telegram', { method: 'PUT', body: { token: $('#tgTok', el).value, access, password: $('#tgPass', el).value, allowed: $('#tgAllowed', el).value.split(/[\s,]+/).filter(Boolean), dailyLimit: +$('#tgLimit', el).value, apiBase: $('#tgBase', el).value, enabled: true } });
+      toast(r.running ? t('tgRunning') + ' @' + r.username : (r.error || t('tgError')), r.running ? 'ok' : 'bad'); renderTelegramCard(r);
+    } catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
+  };
+  if ($('#tgOff', el)) $('#tgOff', el).onclick = async () => renderTelegramCard(await api('/telegram', { method: 'PUT', body: { enabled: false } }));
+  $('#tgRef', el).onclick = () => renderTelegramCard();
 }
 
 // ------------------------------------------------------------ login
