@@ -17,12 +17,15 @@ function t(k, vars) {
   return s;
 }
 // ------------------------------------------------------------ API
+const CLIENT = window.novaDesktop ? 'windows' : window.NovaAndroid ? 'android' : 'web';
+const CH = { 'x-nova-client': CLIENT };
 async function api(path, opts = {}) {
-  const o = Object.assign({ headers: {} }, opts);
+  const o = Object.assign({ headers: {} }, opts); o.headers = Object.assign({}, CH, o.headers);
   if (o.body && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); o.headers['content-type'] = 'application/json'; }
   const r = await fetch('/api' + path, o);
   let data = null; try { data = await r.json(); } catch { }
-  if (r.status === 401 && data && data.needsLogin) { renderLogin(); throw new Error('auth'); }
+  if (r.status === 401 && data && data.needsLogin) { if (data.error && data.error !== 'auth') toast(data.error, 'bad'); renderAuth(); throw new Error('auth'); }
+  if (r.status === 503 && data && data.maintenance) { renderMaintenance(data.announcement); throw new Error('maintenance'); }
   if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
   return data;
 }
@@ -33,7 +36,7 @@ function toast(msg, kind = '') {
 }
 async function loadState() {
   const st = await api('/state');
-  S.fsEnabled = st.fsEnabled; S.platform = st.platform; S.settings = st.settings; S.providers = st.providers; S.presets = st.presets; S.prompts = st.prompts; S.chats = st.chats;
+  S.fsEnabled = st.fsEnabled; S.platform = st.platform; S.settings = st.settings; S.me = st.me; S.config = st.config || {}; S.version = st.version; S.providers = st.providers; S.presets = st.presets; S.prompts = st.prompts; S.chats = st.chats;
   applyLook();
   if (!S.selectedKey || !findModel(S.selectedKey)) S.selectedKey = S.settings.defaultModel && findModel(S.settings.defaultModel) ? S.settings.defaultModel : (allModels().find(m => m.caps.chat) || {}).key || null;
 }
@@ -78,8 +81,13 @@ function modelMode(m) { if (!m) return 'chat'; if (m.caps.video && !m.caps.chat)
 const shortName = m => m ? (m.name && m.name !== m.id && m.name.length < 48 ? m.name : m.id) : '';
 
 // ------------------------------------------------------------ shell
-const NAV = [['chat', 'chat'], ['code', 'code'], ['studio', 'wand'], ['providers', 'plug'], ['models', 'cube'], ['free', 'gift'], ['gallery', 'gallery'], ['prompts', 'book'], ['settings', 'settings']];
+const NAV_ALL = [['chat', 'chat'], ['code', 'code'], ['studio', 'wand'], ['providers', 'plug'], ['models', 'cube'], ['free', 'gift'], ['gallery', 'gallery'], ['prompts', 'book'], ['admin', 'activity'], ['settings', 'settings']];
+const ADMIN_ROUTES = ['providers', 'models', 'free', 'admin'];
+const isAdmin = () => !!(S.me && S.me.role === 'admin');
+let NAV = NAV_ALL;
 function renderShell() {
+  NAV = NAV_ALL.filter(([r]) => isAdmin() || !ADMIN_ROUTES.includes(r));
+  if (!NAV.find(n => n[0] === S.route)) S.route = 'chat';
   $('#app').innerHTML = `<div class="shell">
     <nav class="rail">
       <div class="logo">${icon('sparkles')}</div>
@@ -89,14 +97,15 @@ function renderShell() {
       <button class="nav-btn" id="langBtn" title="${t('language')}">${icon('globe')}<span>${S.settings.lang === 'fa' ? 'EN' : 'فا'}</span></button>
     </nav>
     <main class="main" id="main"></main></div>`;
+  renderBanner();
   $$('.nav-btn[data-route]').forEach(b => b.onclick = () => go(b.dataset.route));
   $('#themeBtn').onclick = async () => { await saveSettings({ theme: S.settings.theme === 'dark' ? 'light' : 'dark' }); renderShell(); renderRoute(); };
   $('#langBtn').onclick = async () => { await saveSettings({ lang: S.settings.lang === 'fa' ? 'en' : 'fa' }); renderShell(); renderRoute(); };
   renderRoute();
 }
-function go(route) { S.route = route; location.hash = route; $$('.nav-btn[data-route]').forEach(b => b.classList.toggle('active', b.dataset.route === route)); renderRoute(); }
+function go(route) { if (!NAV.find(n => n[0] === route)) route = 'chat'; S.route = route; location.hash = route; $$('.nav-btn[data-route]').forEach(b => b.classList.toggle('active', b.dataset.route === route)); renderRoute(); }
 function renderRoute() {
-  const r = { chat: renderChat, code: () => renderCode(), studio: renderStudio, providers: renderProviders, models: renderModels, free: renderFree, gallery: renderGallery, prompts: renderPrompts, settings: renderSettings }[S.route] || renderChat;
+  const r = { chat: renderChat, code: () => renderCode(), studio: renderStudio, providers: renderProviders, models: renderModels, free: renderFree, gallery: renderGallery, prompts: renderPrompts, settings: renderSettings, admin: () => renderAdmin() }[S.route] || renderChat;
   r();
 }
 function pageHead(title, sub, actions = '') { return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div><div class="row">${actions}</div></div>`; }
@@ -520,7 +529,7 @@ async function streamInto(o, history, system) {
   let pending = false;
   const flush = () => { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; updateMsgDom(o); }); };
   try {
-    const r = await fetch('/api/chat/stream', { method: 'POST', signal: ctrl.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ providerId: mm.provider.id, modelId: mm.id, messages: history, system, temperature: S.settings.temperature, wantsImage: !!mm.caps.image }) });
+    const r = await fetch('/api/chat/stream', { method: 'POST', signal: ctrl.signal, headers: { 'content-type': 'application/json', 'x-nova-client': CLIENT }, body: JSON.stringify({ providerId: mm.provider.id, modelId: mm.id, messages: history, system, temperature: S.settings.temperature, wantsImage: !!mm.caps.image }) });
     if (!r.ok) { let e = 'HTTP ' + r.status; try { e = (await r.json()).error; } catch { } throw new Error(e); }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
     while (true) {
@@ -582,7 +591,7 @@ function promptLibraryPicker(onUse) {
 // ------------------------------------------------------------ workspace folder (File System Access API)
 const IGNORE = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.venv', 'venv', '__pycache__', '.idea', '.vscode', '.DS_Store']);
 async function pickFolder() {
-  if (S.fsEnabled || window.novaDesktop) return openFolderDialog();
+  if (S.fsEnabled) return openFolderDialog();
   if (!window.showDirectoryPicker) { toast(t('folderNotSupported'), 'bad'); return; }
   try { S.dir = await window.showDirectoryPicker({ mode: 'readwrite' }); S.agentMode = true; toast(t('folder') + ': ' + S.dir.name, 'ok'); renderChatHead(); renderComposer(); } catch { }
 }
@@ -877,7 +886,7 @@ async function enhancePrompt(btn) {
   if (!cm) return toast(t('pickModelFirst'), 'bad');
   btn.disabled = true; let out = '';
   try {
-    const r = await fetch('/api/chat/stream', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ providerId: cm.provider.id, modelId: cm.id, system: `Rewrite the user's idea as one vivid, detailed English prompt for an AI ${S.studioTab} generator: subject, style, lighting, camera, mood${S.studioTab === 'video' ? ', motion' : ''}. Output only the prompt, no quotes.`, messages: [{ role: 'user', content: idea }] }) });
+    const r = await fetch('/api/chat/stream', { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova-client': CLIENT }, body: JSON.stringify({ providerId: cm.provider.id, modelId: cm.id, system: `Rewrite the user's idea as one vivid, detailed English prompt for an AI ${S.studioTab} generator: subject, style, lighting, camera, mood${S.studioTab === 'video' ? ', motion' : ''}. Output only the prompt, no quotes.`, messages: [{ role: 'user', content: idea }] }) });
     const txt = await r.text();
     txt.split('\n').forEach(l => { if (l.startsWith('data:')) { try { const j = JSON.parse(l.slice(5)); if (j.delta) out += j.delta; } catch { } } });
     if (out.trim()) { ta.value = out.trim(); S.studioPrompt = ta.value; }
@@ -970,22 +979,32 @@ function renderPrompts() {
 
 // ------------------------------------------------------------ SETTINGS
 function renderSettings() {
-  const dm = findModel(S.settings.defaultModel);
+  const dm = findModel(S.settings.defaultModel); const me = S.me || {};
+  const roleBadge = me.role === 'admin' ? `<span class="badge grad">${t('roleAdmin')}</span>` : `<span class="badge">${t('roleUser')}</span>`;
   $('#main').innerHTML = `<div class="page" style="max-width:900px">${pageHead(t('settings'), '')}
+    <div class="section-title">${icon('lock')} ${t('account')}</div>
+    <div class="card">
+      <div class="row" style="margin-bottom:6px"><div class="plogo" style="background:var(--grad)">${esc((me.name || '?').slice(0, 1).toUpperCase())}</div><div class="grow"><b>${esc(me.name || '')}</b> ${roleBadge}<div class="dim" dir="ltr" style="text-align:start">@${esc(me.username || '')}</div></div><button class="btn" id="logoutBtn">${icon('x')}${t('logout')}</button></div>
+      <div class="set-row"><div class="grow"><b>${t('displayName')}</b><div class="row" style="margin-top:8px"><input class="input" id="pfName" value="${esc(me.name || '')}"><button class="btn" id="pfNameSave">${t('save')}</button></div></div></div>
+      <div class="set-row"><div class="grow"><b>${t('changePassword')}</b><div class="row" style="margin-top:8px;flex-wrap:wrap"><input class="input ltr" type="password" id="pfOld" placeholder="${t('currentPassword')}" style="flex:1;min-width:160px"><input class="input ltr" type="password" id="pfNew" placeholder="${t('newPassword')}" style="flex:1;min-width:160px"><button class="btn" id="pfPassSave">${t('save')}</button></div></div></div>
+      ${me.today ? `<div class="set-row"><div><b>${t('usageToday')}</b><small>${t('usageLine', { m: me.today.msgs, i: me.today.images, v: me.today.videos })}</small></div></div>` : ''}
+    </div>
+    <div class="section-title">${icon('telegram')} ${t('tgLinkTitle')}</div>
+    <div class="card" id="tgLink">${me.tgLinked ? `<div class="row"><span class="badge ok">● ${t('tgLinked')}</span>${me.tgUsername ? `<span dir="ltr">@${esc(me.tgUsername)}</span>` : ''}<span class="grow"></span><button class="btn" id="tgUnlink">${t('tgUnlink')}</button></div>`
+      : `<p class="muted" style="margin:0 0 12px;line-height:1.9">${t('tgLinkSub')}</p><button class="btn primary" id="tgCode">${icon('key')}${t('tgGetCode')}</button><div id="tgCodeOut"></div>`}</div>
+    <div class="section-title">${icon('settings')} ${t('preferences')}</div>
     <div class="card">
       <div class="set-row"><div><b>${t('language')}</b><small>فارسی / English</small></div><div class="seg"><button data-lang="fa" class="${S.settings.lang === 'fa' ? 'active' : ''}">فارسی</button><button data-lang="en" class="${S.settings.lang === 'en' ? 'active' : ''}">English</button></div></div>
       <div class="set-row"><div><b>${t('theme')}</b></div><div class="seg"><button data-theme="dark" class="${S.settings.theme === 'dark' ? 'active' : ''}">${icon('moon')}${t('dark')}</button><button data-theme="light" class="${S.settings.theme === 'light' ? 'active' : ''}">${icon('sun')}${t('light')}</button></div></div>
       <div class="set-row"><div><b>${t('defaultModel')}</b></div><button class="model-btn" id="defM">${dm ? `<span class="pdot" style="background:${pColor(dm.provider)}">${pInitial(dm.provider)}</span><span class="mn"><b>${esc(shortName(dm))}</b><small>${esc(dm.provider.name)}</small></span>` : `<span class="mn"><b>${t('selectModel')}</b></span>`}${icon('chevron')}</button></div>
       <div class="set-row"><div class="grow"><b>${t('temperature')}: <span id="tv">${S.settings.temperature}</span></b><input type="range" min="0" max="2" step="0.1" value="${S.settings.temperature}" id="temp" style="width:100%;margin-top:8px;accent-color:var(--accent)"></div></div>
-      <div class="set-row" style="display:block"><b>${t('defaultSystem')}</b><textarea class="textarea" id="defSys" rows="4" dir="auto" style="margin-top:10px">${esc(S.settings.systemPrompt || '')}</textarea><button class="btn sm primary" id="saveSys" style="margin-top:8px">${t('save')}</button></div>
+      <div class="set-row" style="display:block"><b>${isAdmin() ? t('defaultSystemAll') : t('defaultSystem')}</b><textarea class="textarea" id="defSys" rows="4" dir="auto" style="margin-top:10px">${esc(S.settings.systemPrompt || '')}</textarea><button class="btn sm primary" id="saveSys" style="margin-top:8px">${t('save')}</button></div>
     </div>
-    ${window.NovaAndroid ? `<div class="section-title">${icon('globe')} ${t('serverUrl')}</div><div class="card"><div class="row"><span class="grow" dir="ltr">${esc(location.origin)}</span><button class="btn" id="chgSrv">${t('changeServer')}</button></div></div>` : ''}
+    ${window.NovaAndroid || (window.novaDesktop && window.novaDesktop.setConnection) ? `<div class="section-title">${icon('globe')} ${t('serverUrl')}</div><div class="card"><div class="row"><span class="grow" dir="ltr">${window.novaDesktop && window.novaDesktop.connection && window.novaDesktop.connection.mode === 'local' ? t('thisPc') : esc(location.origin)}</span><button class="btn" id="chgSrv">${t('changeServer')}</button></div></div>` : ''}
     <div class="section-title">${icon('download')} ${t('backup')}</div>
-    <div class="card"><div class="row" style="flex-wrap:wrap"><a class="btn" href="/api/export">${icon('download')}${t('exportCfg')}</a><a class="btn" href="/api/export?keys=1">${icon('key')}${t('exportKeys')}</a><button class="btn" id="imp">${icon('upload')}${t('importCfg')}</button><input type="file" id="impF" accept=".json" hidden></div></div>
-    <div class="section-title">${icon('telegram')} ${t('telegram')}</div>
-    <div class="card" id="tgCard"><div class="dim">…</div></div>
+    <div class="card"><div class="row" style="flex-wrap:wrap">${isAdmin() ? `<a class="btn" href="/api/export">${icon('download')}${t('exportCfg')}</a><a class="btn" href="/api/export?keys=1">${icon('key')}${t('exportKeys')}</a><button class="btn" id="imp">${icon('upload')}${t('importCfg')}</button><input type="file" id="impF" accept=".json" hidden>` : `<a class="btn" href="/api/export">${icon('download')}${t('exportMine')}</a>`}</div></div>
     <div class="section-title">${icon('sparkles')} ${t('about')}</div>
-    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v1.1.1</div></div></div>
+    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v${esc(S.version || '')}</div></div></div>
     <p class="muted" style="line-height:1.9;margin-bottom:0">${t('shortcuts')}: <code>Ctrl+K</code> ${t('selectModel')} · <code>Ctrl+Shift+O</code> ${t('newChat')}</p></div></div>`;
   $$('#main .seg button[data-lang]').forEach(b => b.onclick = async () => { if (S.settings.lang === b.dataset.lang) return; await saveSettings({ lang: b.dataset.lang }); renderShell(); });
   $$('#main .seg button[data-theme]').forEach(b => b.onclick = async () => { if (S.settings.theme === b.dataset.theme) return; await saveSettings({ theme: b.dataset.theme }); renderShell(); });
@@ -993,49 +1012,285 @@ function renderSettings() {
   $('#temp').oninput = e => $('#tv').textContent = e.target.value;
   $('#temp').onchange = e => saveSettings({ temperature: +e.target.value });
   $('#saveSys').onclick = async () => { await saveSettings({ systemPrompt: $('#defSys').value }); toast(t('saved'), 'ok'); };
-  if ($('#chgSrv')) $('#chgSrv').onclick = () => window.NovaAndroid.resetServer();
-  renderTelegramCard();
-  $('#imp').onclick = () => $('#impF').click();
-  $('#impF').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await api('/import', { method: 'POST', body: JSON.parse(await f.text()) }); await loadState(); toast(t('saved'), 'ok'); renderShell(); } catch (er) { toast(er.message, 'bad'); } };
+  $('#logoutBtn').onclick = logout;
+  $('#pfNameSave').onclick = async () => { try { S.me = await api('/me', { method: 'PUT', body: { name: $('#pfName').value } }); toast(t('saved'), 'ok'); } catch (e) { toast(e.message, 'bad'); } };
+  $('#pfPassSave').onclick = async () => { try { S.me = await api('/me', { method: 'PUT', body: { oldPassword: $('#pfOld').value, newPassword: $('#pfNew').value } }); $('#pfOld').value = $('#pfNew').value = ''; toast(t('saved'), 'ok'); } catch (e) { toast(e.message, 'bad'); } };
+  if ($('#tgCode')) $('#tgCode').onclick = async () => {
+    try {
+      const r = await api('/me/telegram-code', { method: 'POST' });
+      $('#tgCodeOut').innerHTML = `<div class="tg-code"><div class="dim">${t('tgSendThis')}${r.bot ? ` <a href="https://t.me/${esc(r.bot)}" target="_blank" rel="noopener" dir="ltr">@${esc(r.bot)}</a>` : ''}:</div><code dir="ltr">/link ${esc(r.code)}</code><button class="btn sm" id="tgCopy">${icon('copy')}</button><div class="dim" style="font-size:12px">${t('tgCodeExp', { n: r.expiresIn })}</div></div>`;
+      $('#tgCopy').onclick = () => { navigator.clipboard && navigator.clipboard.writeText('/link ' + r.code); toast(t('copied'), 'ok'); };
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  if ($('#tgUnlink')) $('#tgUnlink').onclick = async () => { S.me = await api('/me/telegram', { method: 'DELETE' }); renderSettings(); };
+  if ($('#chgSrv')) $('#chgSrv').onclick = () => window.NovaAndroid ? window.NovaAndroid.resetServer() : desktopConnDialog();
+  if ($('#imp')) { $('#imp').onclick = () => $('#impF').click(); $('#impF').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await api('/import', { method: 'POST', body: JSON.parse(await f.text()) }); await loadState(); toast(t('saved'), 'ok'); renderShell(); } catch (er) { toast(er.message, 'bad'); } }; }
 }
 
-// ------------------------------------------------------------ telegram bot settings
-async function renderTelegramCard(st) {
-  const el = $('#tgCard'); if (!el) return;
-  try { st = st || await api('/telegram'); } catch (e) { el.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
+// ------------------------------------------------------------ desktop app: this PC or a shared server
+function desktopConnDialog() {
+  const c = (window.novaDesktop && window.novaDesktop.connection) || { mode: 'local', url: '' };
+  modal({
+    title: icon('globe') + t('desktopConn'),
+    body: `<p class="muted" style="line-height:1.9;margin-top:0">${t('desktopConnSub')}</p>
+      <div class="seg" id="dcMode" style="margin-bottom:12px"><button data-m="local" class="${c.mode !== 'remote' ? 'active' : ''}">${t('thisPc')}</button><button data-m="remote" class="${c.mode === 'remote' ? 'active' : ''}">${t('remoteServer')}</button></div>
+      <input class="input ltr" id="dcUrl" placeholder="https://nova.example.com" value="${esc(c.url || '')}">`,
+    foot: `<button class="btn" data-no>${t('cancel')}</button><button class="btn primary" data-yes>${t('connect')}</button>`,
+    onMount(el, close) {
+      let mode = c.mode === 'remote' ? 'remote' : 'local';
+      const sync = () => { $('#dcUrl', el).style.display = mode === 'remote' ? '' : 'none'; $$('#dcMode button', el).forEach(b => b.classList.toggle('active', b.dataset.m === mode)); };
+      sync(); $$('#dcMode button', el).forEach(b => b.onclick = () => { mode = b.dataset.m; sync(); });
+      el.querySelector('[data-no]').onclick = close;
+      el.querySelector('[data-yes]').onclick = async () => {
+        const url = $('#dcUrl', el).value.trim().replace(/\/+$/, '');
+        if (mode === 'remote' && !/^https?:\/\/.+/.test(url)) return toast(t('badUrl'), 'bad');
+        const r = await window.novaDesktop.setConnection({ mode, url });
+        if (r && r.error) toast(r.error, 'bad');
+      };
+    }
+  });
+}
+
+// ------------------------------------------------------------ admin dashboard (admin account only)
+const fmtAgo = ts => { if (!ts) return '—'; const s = (Date.now() - ts) / 1000; if (s < 60) return t('justNow'); if (s < 3600) return Math.floor(s / 60) + ' ' + t('minAgo'); if (s < 86400) return Math.floor(s / 3600) + ' ' + t('hourAgo'); return Math.floor(s / 86400) + ' ' + t('dayAgo'); };
+const PLAT_ICON = { web: 'globe', windows: 'columns', android: 'bot', telegram: 'telegram' };
+const platChips = pl => ['web', 'windows', 'android', 'telegram'].filter(p => pl && pl[p]).map(p => `<span class="plat" title="${t('plat_' + p)} · ${fmtAgo(pl[p])}">${icon(PLAT_ICON[p])}</span>`).join('') || '<span class="dim">—</span>';
+async function renderAdmin(tab) {
+  if (!isAdmin()) return go('chat');
+  S.adminTab = tab || S.adminTab || 'overview';
+  const tabs = ['overview', 'users', 'sessions', 'access', 'telegram', 'activity'];
+  $('#main').innerHTML = `<div class="page" style="max-width:1180px">${pageHead(t('nav_admin'), t('adminSub'), `<button class="btn" id="admRef">${icon('refresh')}</button>`)}
+    <div class="adm-tabs">${tabs.map(x => `<button class="${S.adminTab === x ? 'active' : ''}" data-t="${x}">${t('adm_' + x)}</button>`).join('')}</div>
+    <div id="admBody"><div class="dim" style="padding:30px">…</div></div></div>`;
+  $$('.adm-tabs button').forEach(b => b.onclick = () => renderAdmin(b.dataset.t));
+  $('#admRef').onclick = () => renderAdmin(S.adminTab);
+  const el = $('#admBody');
+  try { await ({ overview: admOverview, users: admUsers, sessions: admSessions, access: admAccess, telegram: admTelegram, activity: admActivity })[S.adminTab](el); }
+  catch (e) { el.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; }
+}
+async function admOverview(el) {
+  const o = await api('/admin/overview');
+  const max = Math.max(1, ...o.days.map(d => d.msgs + d.images + d.videos));
+  const stat = (ic, label, val, sub = '') => `<div class="card stat"><div class="stat-ic">${icon(ic)}</div><div><div class="dim">${label}</div><b>${val}</b>${sub ? `<small class="dim">${sub}</small>` : ''}</div></div>`;
+  el.innerHTML = `<div class="stat-grid">
+      ${stat('chat', t('st_msgsToday'), o.today.msgs)}${stat('image', t('st_imagesToday'), o.today.images)}${stat('video', t('st_videosToday'), o.today.videos)}
+      ${stat('bot', t('st_users'), o.users.total, t('st_usersSub', { a: o.users.active24h, p: o.users.pending }))}
+    </div>
+    <div class="adm-cols">
+      <div class="card"><div class="section-title" style="margin-top:0">${icon('activity')} ${t('st_14days')}</div>
+        <div class="bars">${o.days.map(d => { const v = d.msgs + d.images + d.videos; return `<div class="dbar" title="${d.day}: ${d.msgs} / ${d.images} / ${d.videos}"><i style="height:${Math.round(v / max * 100)}%"></i><span>${d.day.slice(8)}</span></div>`; }).join('')}</div></div>
+      <div class="card"><div class="section-title" style="margin-top:0">${icon('globe')} ${t('st_platforms')}</div>
+        ${['web', 'windows', 'android', 'telegram'].map(p => { const td = (o.today.platforms || {})[p] || {}; return `<div class="plat-row"><span class="plat">${icon(PLAT_ICON[p])}</span><b>${t('plat_' + p)}</b><span class="grow"></span><span class="dim">${t('st_online')}: ${(o.online || {})[p] || 0}</span><span class="dim">${t('st_active24')}: ${o.platformsActive[p] || 0}</span><span>${(td.msgs || 0) + (td.images || 0) + (td.videos || 0)} ${t('st_reqToday')}</span></div>`; }).join('')}</div>
+    </div>
+    <div class="adm-cols">
+      <div class="card"><div class="section-title" style="margin-top:0">${icon('cube')} ${t('st_topModels')}</div>${o.topModels.length ? o.topModels.map(m => `<div class="plat-row"><span dir="ltr" class="grow" style="overflow:hidden;text-overflow:ellipsis">${esc(m.key.split('::')[1])}</span><b>${m.n}</b></div>`).join('') : `<div class="dim">—</div>`}</div>
+      <div class="card"><div class="section-title" style="margin-top:0">${icon('settings')} ${t('st_server')}</div>
+        <div class="plat-row"><span>${t('version')}</span><span class="grow"></span><b>${esc(o.server.version)}</b></div>
+        <div class="plat-row"><span>${t('st_uptime')}</span><span class="grow"></span><b>${Math.floor(o.server.uptime / 3600)}h ${Math.floor(o.server.uptime % 3600 / 60)}m</b></div>
+        <div class="plat-row"><span>${t('nav_providers')} / ${t('nav_models')}</span><span class="grow"></span><b>${o.server.providers} / ${o.server.models}</b></div>
+        <div class="plat-row"><span>${t('st_chatsMedia')}</span><span class="grow"></span><b>${o.server.chats} / ${o.server.media}</b></div>
+        <div class="plat-row"><span>${t('telegram')}</span><span class="grow"></span>${o.telegram.running ? `<span class="badge ok">@${esc(o.telegram.username)}</span>` : `<span class="badge">${t('tgStopped')}</span>`}</div>
+        <div class="plat-row"><span>${t('maintenance')}</span><span class="grow"></span>${o.config.maintenance ? `<span class="badge bad">${t('on')}</span>` : `<span class="badge">${t('off')}</span>`}</div>
+        <div class="plat-row"><span>RAM</span><span class="grow"></span><b dir="ltr">${Math.round(o.server.rss / 1048576)} MB</b></div></div>
+    </div>
+    <div class="card"><div class="section-title" style="margin-top:0">${icon('zap')} ${t('broadcast')}</div><p class="muted" style="margin-top:0">${t('broadcastSub')}</p>
+      <textarea class="textarea" id="bcText" rows="3" dir="auto"></textarea><div class="row" style="margin-top:8px"><label class="row"><input type="checkbox" id="bcTg" checked>${t('telegram')}</label><label class="row"><input type="checkbox" id="bcApp" checked>${t('bcApps')}</label><span class="grow"></span><button class="btn primary" id="bcSend">${icon('send')}${t('send')}</button></div></div>`;
+  $('#bcSend').onclick = async () => {
+    const text = $('#bcText').value.trim(); if (!text) return;
+    if (!(await confirmBox(t('broadcastQ')))) return;
+    try { const r = await api('/admin/broadcast', { method: 'POST', body: { text, telegram: $('#bcTg').checked, app: $('#bcApp').checked } }); $('#bcText').value = ''; toast(t('broadcastDone', { n: (r.telegram || {}).sent || 0 }), 'ok'); } catch (e) { toast(e.message, 'bad'); }
+  };
+}
+async function admUsers(el) {
+  const list = await api('/admin/users');
+  const q = S.admQ || '';
+  const rows = list.filter(u => !q || (u.username + ' ' + u.name).toLowerCase().includes(q.toLowerCase())).sort((a, b) => (a.status === 'pending' ? -1 : 0) - (b.status === 'pending' ? -1 : 0) || (b.lastSeen || 0) - (a.lastSeen || 0));
+  el.innerHTML = `<div class="row" style="margin-bottom:12px"><input class="input" id="uq" placeholder="${t('searchUsers')}" value="${esc(q)}" style="max-width:320px"><span class="grow"></span><button class="btn primary" id="uNew">${icon('plus')}${t('newUser')}</button></div>
+    <div class="card" style="padding:0;overflow:auto"><table class="tbl"><thead><tr><th>${t('user')}</th><th>${t('role')}</th><th>${t('status')}</th><th>${t('platforms')}</th><th>${t('today')}</th><th>${t('total')}</th><th>${t('lastSeen')}</th><th></th></tr></thead><tbody>
+    ${rows.map(u => `<tr data-id="${u.id}"><td><b>${esc(u.name)}</b><div class="dim" dir="ltr" style="text-align:start">@${esc(u.username)}${u.tgLinked ? ` · ${icon('telegram')}` : ''}</div></td>
+      <td>${u.role === 'admin' ? `<span class="badge grad">${t('roleAdmin')}</span>` : `<span class="badge">${t('roleUser')}</span>`}</td>
+      <td>${u.status === 'active' ? `<span class="badge ok">${t('st_active')}</span>` : u.status === 'pending' ? `<span class="badge warn">${t('st_pending')}</span>` : `<span class="badge bad">${t('st_banned')}</span>`}</td>
+      <td>${platChips(u.platforms)}</td><td dir="ltr">${u.today.msgs}/${u.today.images}/${u.today.videos}</td><td dir="ltr">${(u.totals || {}).msgs || 0}/${(u.totals || {}).images || 0}/${(u.totals || {}).videos || 0}</td><td>${fmtAgo(u.lastSeen)}</td>
+      <td style="white-space:nowrap">${u.status === 'pending' ? `<button class="btn sm primary" data-a="approve">${t('approve')}</button>` : ''}<button class="iconbtn" data-a="edit" title="${t('edit')}">${icon('edit')}</button>${u.id !== S.me.id ? `<button class="iconbtn" data-a="ban" title="${u.status === 'banned' ? t('enable') : t('disable')}">${icon(u.status === 'banned' ? 'check' : 'stop')}</button><button class="iconbtn" data-a="del" title="${t('delete')}">${icon('trash')}</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="8"><div class="empty">—</div></td></tr>`}
+    </tbody></table></div><p class="dim" style="font-size:12px">${t('usersLegend')}</p>`;
+  $('#uq').oninput = e => { S.admQ = e.target.value; clearTimeout(S._uqT); S._uqT = setTimeout(() => admUsers(el).then(() => { const i = $('#uq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }), 250); };
+  $('#uNew').onclick = () => userForm(null, () => admUsers(el));
+  el.querySelector('tbody').onclick = async e => {
+    const b = e.target.closest('[data-a]'); if (!b) return; const u = list.find(x => x.id === b.closest('tr').dataset.id); if (!u) return;
+    try {
+      if (b.dataset.a === 'edit') return userForm(u, () => admUsers(el));
+      if (b.dataset.a === 'approve') await api('/admin/users/' + u.id, { method: 'PUT', body: { status: 'active' } });
+      if (b.dataset.a === 'ban') await api('/admin/users/' + u.id, { method: 'PUT', body: { status: u.status === 'banned' ? 'active' : 'banned' } });
+      if (b.dataset.a === 'del') { if (!(await confirmBox(t('deleteUserQ', { u: u.username })))) return; await api('/admin/users/' + u.id + '?data=1', { method: 'DELETE' }); }
+      admUsers(el);
+    } catch (er) { toast(er.message, 'bad'); }
+  };
+}
+function userForm(u, done) {
+  const q = (u && u.quota) || {}; const am = (u && u.allowedModels) || [];
+  const models = allModels();
+  modal({
+    title: icon(u ? 'edit' : 'plus') + (u ? t('editUser') : t('newUser')), wide: true,
+    body: `<div class="form-grid">
+      <div><label class="lbl">${t('displayName')}</label><input class="input" id="ufName" value="${esc(u ? u.name : '')}"></div>
+      <div><label class="lbl">${t('username')}</label><input class="input ltr" id="ufUser" value="${esc(u ? u.username : '')}" ${u ? 'disabled' : ''}></div>
+      <div><label class="lbl">${u ? t('newPasswordOpt') : t('password')}</label><input class="input ltr" type="password" id="ufPass"></div>
+      <div><label class="lbl">${t('role')}</label><div class="seg" id="ufRole"><button data-r="user" class="${!u || u.role !== 'admin' ? 'active' : ''}">${t('roleUser')}</button><button data-r="admin" class="${u && u.role === 'admin' ? 'active' : ''}">${t('roleAdmin')}</button></div></div>
+    </div>
+    <div class="section-title" style="font-size:13px">${t('quotaTitle')} <small class="dim">${t('quotaHint')}</small></div>
+    <div class="form-grid three"><div><label class="lbl">${t('qMsgs')}</label><input class="input" type="number" min="0" id="qM" value="${q.msgs ?? ''}" placeholder="${t('qDefault')}"></div><div><label class="lbl">${t('qImages')}</label><input class="input" type="number" min="0" id="qI" value="${q.images ?? ''}" placeholder="${t('qDefault')}"></div><div><label class="lbl">${t('qVideos')}</label><input class="input" type="number" min="0" id="qV" value="${q.videos ?? ''}" placeholder="${t('qDefault')}"></div></div>
+    <div class="section-title" style="font-size:13px">${t('allowedModels')} <small class="dim">${t('allowedModelsHint')}</small></div>
+    <input class="input" id="amQ" placeholder="${t('searchModels')}" style="margin-bottom:8px"><div class="am-list" id="amList">${models.map(m => `<label class="am" data-k="${esc(m.key)}"><input type="checkbox" value="${esc(m.key)}" ${am.includes(m.key) ? 'checked' : ''}><span dir="ltr">${esc(shortName(m))}</span><small class="dim">${esc(m.provider.name)}</small></label>`).join('')}</div>
+    ${u && u.tgLinked ? `<label class="row" style="margin-top:10px"><input type="checkbox" id="ufUnlink">${t('tgUnlink')} <span dir="ltr">@${esc(u.tgUsername || '')}</span></label>` : ''}`,
+    foot: `<button class="btn" data-no>${t('cancel')}</button><button class="btn primary" data-yes>${t('save')}</button>`,
+    onMount(el, close) {
+      let role = u && u.role === 'admin' ? 'admin' : 'user';
+      $$('#ufRole button', el).forEach(b => b.onclick = () => { role = b.dataset.r; $$('#ufRole button', el).forEach(x => x.classList.toggle('active', x === b)); });
+      $('#amQ', el).oninput = e => { const v = e.target.value.toLowerCase(); $$('.am', el).forEach(l => l.style.display = l.dataset.k.toLowerCase().includes(v) ? '' : 'none'); };
+      el.querySelector('[data-no]').onclick = close;
+      el.querySelector('[data-yes]').onclick = async () => {
+        const num = id => $(id, el).value === '' ? undefined : Math.max(0, +$(id, el).value);
+        const quota = { msgs: num('#qM'), images: num('#qI'), videos: num('#qV') }; Object.keys(quota).forEach(k => quota[k] === undefined && delete quota[k]);
+        const body = { name: $('#ufName', el).value.trim(), role, quota: Object.keys(quota).length ? quota : null, allowedModels: $$('#amList input:checked', el).map(i => i.value) };
+        if ($('#ufPass', el).value) body.password = $('#ufPass', el).value;
+        if ($('#ufUnlink', el) && $('#ufUnlink', el).checked) body.unlinkTelegram = true;
+        try {
+          if (u) await api('/admin/users/' + u.id, { method: 'PUT', body });
+          else { const nu = await api('/admin/users', { method: 'POST', body: Object.assign({ username: $('#ufUser', el).value.trim(), password: $('#ufPass', el).value }, body) }); await api('/admin/users/' + nu.id, { method: 'PUT', body: { allowedModels: body.allowedModels } }); }
+          close(); toast(t('saved'), 'ok'); done && done();
+        } catch (e) { toast(e.message, 'bad'); }
+      };
+    }
+  });
+}
+async function admSessions(el) {
+  const list = await api('/admin/sessions');
+  el.innerHTML = `<div class="card" style="padding:0;overflow:auto"><table class="tbl"><thead><tr><th>${t('user')}</th><th>${t('platform')}</th><th>${t('device')}</th><th>${t('signedIn')}</th><th>${t('lastSeen')}</th><th></th></tr></thead><tbody>
+    ${list.map(s => `<tr data-id="${s.id}"><td><b>${esc(s.name)}</b><div class="dim" dir="ltr" style="text-align:start">@${esc(s.user)}</div></td><td><span class="plat">${icon(PLAT_ICON[s.platform] || 'globe')}</span> ${t('plat_' + s.platform)}</td><td class="dim" dir="ltr" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:start">${esc(s.ua)}</td><td>${fmtAgo(s.createdAt)}</td><td>${fmtAgo(s.lastSeen)}</td><td><button class="btn sm" data-a="rev">${t('signOut')}</button></td></tr>`).join('') || `<tr><td colspan="6"><div class="empty">—</div></td></tr>`}
+    </tbody></table></div>`;
+  el.querySelector('tbody').onclick = async e => { const b = e.target.closest('[data-a]'); if (!b) return; await api('/admin/sessions/' + b.closest('tr').dataset.id, { method: 'DELETE' }); admSessions(el); };
+}
+async function admAccess(el) {
+  const o = await api('/admin/overview'); const c = o.config;
+  el.innerHTML = `<div class="card">
+    <div class="set-row"><div><b>${t('registration')}</b><small>${t('registrationSub')}</small></div><div class="seg" id="acReg">${['closed', 'approval', 'open'].map(x => `<button data-v="${x}" class="${c.registration === x ? 'active' : ''}">${t('reg_' + x)}</button>`).join('')}</div></div>
+    <div class="set-row"><div class="grow"><b>${t('defaultQuota')}</b><small>${t('quotaHint')}</small><div class="form-grid three" style="margin-top:8px"><div><label class="lbl">${t('qMsgs')}</label><input class="input" type="number" min="0" id="dqM" value="${c.defaultQuota.msgs}"></div><div><label class="lbl">${t('qImages')}</label><input class="input" type="number" min="0" id="dqI" value="${c.defaultQuota.images}"></div><div><label class="lbl">${t('qVideos')}</label><input class="input" type="number" min="0" id="dqV" value="${c.defaultQuota.videos}"></div></div></div></div>
+    <div class="set-row" style="display:block"><b>${t('announcement')}</b><small class="dim" style="display:block">${t('announcementSub')}</small><textarea class="textarea" id="acAnn" rows="2" dir="auto" style="margin-top:8px">${esc(c.announcement || '')}</textarea></div>
+    <div class="set-row"><div><b>${t('maintenance')}</b><small>${t('maintenanceSub')}</small></div><label class="switch"><input type="checkbox" id="acMaint" ${c.maintenance ? 'checked' : ''}><i></i></label></div>
+    <button class="btn primary" id="acSave" style="margin-top:10px">${icon('check')}${t('save')}</button></div>
+    <div class="card" style="margin-top:14px"><div class="row"><div class="grow"><b>${t('nav_providers')}</b><div class="dim">${t('providersShared')}</div></div><button class="btn" id="acProv">${icon('plug')}${t('nav_providers')}</button></div></div>`;
+  let reg = c.registration;
+  $$('#acReg button').forEach(b => b.onclick = () => { reg = b.dataset.v; $$('#acReg button').forEach(x => x.classList.toggle('active', x === b)); });
+  $('#acProv').onclick = () => go('providers');
+  $('#acSave').onclick = async () => {
+    try { await api('/admin/config', { method: 'PUT', body: { registration: reg, defaultQuota: { msgs: +$('#dqM').value, images: +$('#dqI').value, videos: +$('#dqV').value }, announcement: $('#acAnn').value, maintenance: $('#acMaint').checked } }); toast(t('saved'), 'ok'); } catch (e) { toast(e.message, 'bad'); }
+  };
+}
+async function admTelegram(el, st) {
+  st = st || await api('/telegram');
   const status = st.running ? `<span class="badge ok">● ${t('tgRunning')}</span> <a class="btn sm" href="https://t.me/${esc(st.username)}" target="_blank" rel="noopener" dir="ltr">${icon('telegram')}@${esc(st.username)}</a>`
     : st.error ? `<span class="badge bad">${t('tgError')}</span> <span class="dim" dir="ltr" style="font-size:12px">${esc(st.error)}</span>` : `<span class="badge">${t('tgStopped')}</span>`;
-  el.innerHTML = `<p class="muted" style="margin:0 0 14px;line-height:1.9">${t('tgIntro')}</p>
-    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">${status}</div>
+  el.innerHTML = `<div class="card"><p class="muted" style="margin:0 0 14px;line-height:1.9">${t('tgIntro')}</p>
+    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">${status}<span class="dim">${t('tgLinkedN', { n: st.linked || 0 })}</span></div>
     <div class="set-row"><div class="grow"><b>${t('tgToken')}</b><small>${t('tgTokenHint')}</small><input class="input ltr" id="tgTok" type="password" placeholder="123456789:AA..." value="${esc(st.token)}" style="margin-top:8px"></div></div>
-    <div class="set-row"><div><b>${t('tgAccess')}</b></div><div class="seg" id="tgAcc">${['password', 'list', 'all'].map(a => `<button data-a="${a}" class="${st.access === a ? 'active' : ''}">${t('tgAcc_' + a)}</button>`).join('')}</div></div>
-    <div class="set-row tg-opt" data-for="password"><div class="grow"><b>${t('tgPass')}</b><small>${t('tgPassHint')}</small><input class="input" id="tgPass" type="password" value="${st.hasPassword ? '••••' : ''}" style="margin-top:8px"></div></div>
-    <div class="set-row tg-opt" data-for="list"><div class="grow"><b>${t('tgAllowed')}</b><small>${t('tgAllowedHint')}</small><textarea class="textarea ltr" id="tgAllowed" rows="3" style="margin-top:8px">${esc((st.allowed || []).join('\n'))}</textarea></div></div>
-    <div class="set-row"><div><b>${t('tgLimit')}</b><small>${t('tgLimitHint')}</small></div><input class="input" id="tgLimit" type="number" min="0" value="${st.dailyLimit || 0}" style="width:110px"></div>
+    <div class="set-row"><div><b>${t('tgAccess')}</b><small>${t('tgAccessSub')}</small></div><div class="seg" id="tgAcc">${['accounts', 'open'].map(a => `<button data-v="${a}" class="${st.access === a ? 'active' : ''}">${t('tgAcc_' + a)}</button>`).join('')}</div></div>
     <details style="margin:10px 0"><summary class="dim" style="cursor:pointer">${t('advanced')}</summary><div class="set-row"><div class="grow"><b>${t('tgApiBase')}</b><small>${t('tgApiBaseHint')}</small><input class="input ltr" id="tgBase" placeholder="https://api.telegram.org" value="${esc(st.apiBase || '')}" style="margin-top:8px"></div></div></details>
-    <div class="row" style="flex-wrap:wrap"><button class="btn primary" id="tgSave">${icon('zap')}${st.enabled ? t('tgSaveRestart') : t('tgConnect')}</button>${st.enabled ? `<button class="btn" id="tgOff">${icon('stop')}${t('tgDisable')}</button>` : ''}<button class="btn ghost" id="tgRef">${icon('refresh')}</button></div>
-    ${(st.users || []).length ? `<div class="section-title" style="margin-top:20px;font-size:13px">${icon('bot')} ${t('tgUsers')} (${st.users.length})</div><div class="tg-users">${st.users.map(u => `<div class="row"><b>${esc(u.name || '—')}</b>${u.username ? `<span class="dim" dir="ltr">@${esc(u.username)}</span>` : ''}<span class="grow"></span><code dir="ltr">${esc(u.id)}</code></div>`).join('')}</div>` : ''}`;
+    <div class="row" style="flex-wrap:wrap"><button class="btn primary" id="tgSave">${icon('zap')}${st.enabled ? t('tgSaveRestart') : t('tgConnect')}</button>${st.enabled ? `<button class="btn" id="tgOff">${icon('stop')}${t('tgDisable')}</button>` : ''}</div>
+    <p class="dim" style="font-size:12px;line-height:1.9;margin-bottom:0">${t('tgAdminHint')}</p></div>`;
   let access = st.access;
-  const showOpts = () => $$('.tg-opt', el).forEach(r => r.style.display = r.dataset.for === access ? '' : 'none');
-  showOpts();
-  $$('#tgAcc button', el).forEach(b => b.onclick = () => { access = b.dataset.a; $$('#tgAcc button', el).forEach(x => x.classList.toggle('active', x === b)); showOpts(); });
+  $$('#tgAcc button', el).forEach(b => b.onclick = () => { access = b.dataset.v; $$('#tgAcc button', el).forEach(x => x.classList.toggle('active', x === b)); });
   $('#tgSave', el).onclick = async () => {
-    const btn = $('#tgSave', el); btn.disabled = true; btn.innerHTML = "…";
-    try {
-      const r = await api('/telegram', { method: 'PUT', body: { token: $('#tgTok', el).value, access, password: $('#tgPass', el).value, allowed: $('#tgAllowed', el).value.split(/[\s,]+/).filter(Boolean), dailyLimit: +$('#tgLimit', el).value, apiBase: $('#tgBase', el).value, enabled: true } });
-      toast(r.running ? t('tgRunning') + ' @' + r.username : (r.error || t('tgError')), r.running ? 'ok' : 'bad'); renderTelegramCard(r);
-    } catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
+    const btn = $('#tgSave', el); btn.disabled = true; btn.innerHTML = '…';
+    try { const r = await api('/telegram', { method: 'PUT', body: { token: $('#tgTok', el).value, access, apiBase: $('#tgBase', el).value, enabled: true } }); toast(r.running ? t('tgRunning') + ' @' + r.username : (r.error || t('tgError')), r.running ? 'ok' : 'bad'); admTelegram(el, r); }
+    catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
   };
-  if ($('#tgOff', el)) $('#tgOff', el).onclick = async () => renderTelegramCard(await api('/telegram', { method: 'PUT', body: { enabled: false } }));
-  $('#tgRef', el).onclick = () => renderTelegramCard();
+  if ($('#tgOff', el)) $('#tgOff', el).onclick = async () => admTelegram(el, await api('/telegram', { method: 'PUT', body: { enabled: false } }));
+}
+async function admActivity(el) {
+  const list = await api('/admin/activity');
+  el.innerHTML = `<div class="card" style="padding:0;overflow:auto"><table class="tbl"><thead><tr><th>${t('when')}</th><th>${t('user')}</th><th>${t('event')}</th><th>${t('details')}</th></tr></thead><tbody>
+    ${list.map(a => `<tr><td>${fmtAgo(a.t)}</td><td dir="ltr" style="text-align:start">${a.user ? '@' + esc(a.user) : '—'}</td><td>${esc(t('ev_' + a.type.replace('.', '_')) || a.type)}</td><td class="dim" dir="ltr" style="text-align:start;font-size:12px">${esc(a.data ? Object.entries(a.data).map(([k, v]) => k + ': ' + (Array.isArray(v) ? v.join(',') : v)).join(' · ') : '')}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">—</div></td></tr>`}
+    </tbody></table></div>`;
 }
 
-// ------------------------------------------------------------ login
-function renderLogin() {
-  $('#app').innerHTML = `<div class="shell" style="grid-template-columns:1fr"><main class="main" style="display:grid;place-items:center"><div class="card login"><div class="welcome" style="margin:0"><div class="orb">${icon('lock')}</div><h2>${t('appName')}</h2></div>
-    <input class="input" type="password" id="lp" placeholder="${t('password')}" style="margin-bottom:12px"><button class="btn primary" id="lb" style="width:100%">${t('login')}</button></div></main></div>`;
-  const go2 = async () => { const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: $('#lp').value }) }); if (r.ok) boot(); else toast(t('wrongPass'), 'bad'); };
-  $('#lb').onclick = go2; $('#lp').onkeydown = e => { if (e.key === 'Enter') go2(); };
+// ------------------------------------------------------------ sign in / first-run setup / register
+async function renderAuth(mode) {
+  closeEvents();
+  let info = {}; try { info = await (await fetch('/api/auth/info', { headers: CH })).json(); } catch { }
+  if (info.lang && !S.settings) { S.settings = { lang: info.lang, theme: 'dark' }; applyLook(); }
+  mode = info.setupNeeded ? 'setup' : (mode || 'login');
+  const canReg = !info.setupNeeded && info.registration && info.registration !== 'closed';
+  $('#app').innerHTML = `<div class="auth-wrap"><div class="card auth-card">
+    <div class="welcome" style="margin:0 0 18px"><div class="orb">${icon(mode === 'setup' ? 'key' : 'lock')}</div><h2>${t('appName')}</h2><p>${mode === 'setup' ? t('setupSub') : mode === 'register' ? t('registerSub') : t('loginSub')}</p></div>
+    ${mode === 'login' && canReg ? `<div class="seg auth-seg"><button class="active">${t('login')}</button><button id="toReg">${t('register')}</button></div>` : mode === 'register' ? `<div class="seg auth-seg"><button id="toLogin">${t('login')}</button><button class="active">${t('register')}</button></div>` : ''}
+    ${mode !== 'login' ? `<label class="lbl">${t('displayName')}</label><input class="input" id="aName" autocomplete="name">` : ''}
+    <label class="lbl">${t('username')}</label><input class="input ltr" id="aUser" autocomplete="username" autocapitalize="off" spellcheck="false">
+    <label class="lbl">${t('password')}</label><input class="input ltr" type="password" id="aPass" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}">
+    ${mode === 'setup' && info.setupCodeRequired ? `<label class="lbl">${t('setupCode')}</label><input class="input ltr" id="aCode" placeholder="••••••••"><small class="dim">${t('setupCodeHint')}</small>` : ''}
+    <button class="btn primary" id="aGo" style="width:100%;margin-top:16px">${mode === 'setup' ? t('createAdmin') : mode === 'register' ? t('register') : t('login')}</button>
+    ${window.novaDesktop && window.novaDesktop.setConnection ? `<button class="btn ghost" id="aConn" style="width:100%;margin-top:8px">${icon('globe')}${t('desktopConn')}</button>` : ''}
+    ${window.NovaAndroid ? `<button class="btn ghost" id="aSrv" style="width:100%;margin-top:8px">${icon('globe')}${t('changeServer')}</button>` : ''}
+    <div class="dim" style="text-align:center;margin-top:14px;font-size:12px">v${esc(info.version || '')}</div></div></div>`;
+  if ($('#toReg')) $('#toReg').onclick = () => renderAuth('register');
+  if ($('#toLogin')) $('#toLogin').onclick = () => renderAuth('login');
+  if ($('#aConn')) $('#aConn').onclick = () => desktopConnDialog();
+  if ($('#aSrv')) $('#aSrv').onclick = () => window.NovaAndroid.resetServer();
+  const submit = async () => {
+    const body = { username: $('#aUser').value.trim(), password: $('#aPass').value, name: $('#aName') ? $('#aName').value.trim() : undefined, code: $('#aCode') ? $('#aCode').value.trim() : undefined };
+    const btn = $('#aGo'); btn.disabled = true;
+    try {
+      const r = await fetch('/api/auth/' + mode, { method: 'POST', headers: Object.assign({ 'content-type': 'application/json' }, CH), body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      if (d.pending) { toast(t('pendingApproval'), 'ok'); return renderAuth('login'); }
+      boot();
+    } catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
+  };
+  $('#aGo').onclick = submit;
+  $$('.auth-card input').forEach(i => i.onkeydown = e => { if (e.key === 'Enter') submit(); });
+  setTimeout(() => ($('#aName') || $('#aUser')).focus(), 50);
+}
+function renderMaintenance(msg) {
+  $('#app').innerHTML = `<div class="auth-wrap"><div class="card auth-card" style="text-align:center"><div class="welcome" style="margin:0"><div class="orb">${icon('settings')}</div><h2>${t('maintTitle')}</h2><p>${esc(msg || t('maintSub'))}</p></div>
+    <button class="btn" id="mRetry" style="margin-top:14px">${icon('refresh')}${t('retry')}</button> <button class="btn ghost" id="mOut" style="margin-top:14px">${t('logout')}</button></div></div>`;
+  $('#mRetry').onclick = () => boot();
+  $('#mOut').onclick = logout;
+}
+async function logout() { try { await fetch('/api/auth/logout', { method: 'POST', headers: CH }); } catch { } closeEvents(); S.me = null; renderAuth('login'); }
+function renderBanner() {
+  const old = $('#banner'); if (old) old.remove();
+  const a = S.config && S.config.announcement; if (!a || localStorage.getItem('nova.bannerX') === a) return;
+  const el = document.createElement('div'); el.id = 'banner'; el.className = 'banner';
+  el.innerHTML = `${icon('zap')}<span dir="auto">${esc(a)}</span><button class="iconbtn" title="x">${icon('x')}</button>`;
+  el.querySelector('button').onclick = () => { localStorage.setItem('nova.bannerX', a); el.remove(); };
+  const m = $('.shell'); if (m) m.prepend(el);
+}
+
+// ------------------------------------------------------------ live sync: every app and the bot share one server
+let ES = null, esRetry = null;
+function closeEvents() { if (ES) { ES.close(); ES = null; } clearTimeout(esRetry); }
+function openEvents() {
+  closeEvents();
+  if (!window.EventSource) return;
+  ES = new EventSource('/api/events?client=' + CLIENT);
+  let t1 = null; const later = fn => { clearTimeout(t1); t1 = setTimeout(fn, 250); };
+  ES.addEventListener('providers', () => later(async () => {
+    if (S.streams && S.streams.size) return;
+    const st = await api('/state').catch(() => null); if (!st) return;
+    S.providers = st.providers; S.me = st.me;
+    if (!S.selectedKey || !findModel(S.selectedKey)) S.selectedKey = (allModels().find(m => m.caps.chat) || {}).key || null;
+    if (['providers', 'models'].includes(S.route)) renderRoute(); else if (S.route === 'chat' || S.route === 'code') { renderChatHead(); }
+  }));
+  ES.addEventListener('chats', () => later(async () => {
+    const list = await api('/chats').catch(() => null); if (!list) return;
+    S.chats = list; if (S.route === 'chat') renderChatList();
+    if (S.chat && S.chat.id && !(S.streams && S.streams.size)) { const c = await api('/chats/' + S.chat.id).catch(() => null); if (c && c.messages.length !== S.chat.messages.length) { S.chat = c; renderMessages(); scrollBottom(true); } }
+  }));
+  ES.addEventListener('config', e => { try { S.config = JSON.parse(e.data); } catch { } renderBanner(); if (S.config.maintenance && !isAdmin()) renderMaintenance(S.config.announcement); });
+  ES.addEventListener('notice', e => { try { toast('📣 ' + JSON.parse(e.data).text, 'ok'); } catch { } });
+  ES.addEventListener('me', async () => { const me = await api('/me').catch(() => null); if (me) { const roleChanged = S.me && S.me.role !== me.role; S.me = me; if (roleChanged) { await loadState(); renderShell(); } } });
+  ES.addEventListener('logout', () => { closeEvents(); renderAuth('login'); });
+  ES.onerror = () => { if (ES && ES.readyState === 2) { closeEvents(); esRetry = setTimeout(() => { if (S.me) openEvents(); }, 5000); } };
 }
 
 // ------------------------------------------------------------ boot + sync
@@ -1054,8 +1309,9 @@ setInterval(async () => {
   } catch { }
 }, 20000);
 async function boot() {
-  try { await loadState(); } catch (e) { if (e.message === 'auth') return; $('#app').innerHTML = `<div class="err-box" style="margin:40px">${esc(e.message)}</div>`; return; }
-  const h = location.hash.slice(1); if (NAV.find(n => n[0] === h)) S.route = h;
+  try { await loadState(); } catch (e) { if (e.message === 'auth' || e.message === 'maintenance') return; $('#app').innerHTML = `<div class="err-box" style="margin:40px">${esc(e.message)}</div>`; return; }
+  const h = location.hash.slice(1); if (NAV_ALL.find(n => n[0] === h)) S.route = h;
   renderShell();
+  openEvents();
 }
 boot();

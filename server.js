@@ -58,6 +58,8 @@ function saveDb() {
   }, 150);
 }
 loadDb();
+const acc = require('./accounts')({ getDb: () => db, saveDb, uid });
+const VERSION = (() => { try { return require('./package.json').version; } catch { return '1.2.0'; } })();
 
 // ---------------------------------------------------------------- capabilities
 const RX = {
@@ -270,7 +272,7 @@ async function streamChat(p, model, messages, opts, emit, signal) {
         for (const part of parts) {
           if (part.text) emit(part.thought ? { reasoning: part.text } : { delta: part.text });
           const inl = part.inlineData || part.inline_data;
-          if (inl) { const item = saveMedia(Buffer.from(inl.data, 'base64'), (inl.mimeType || inl.mime_type || 'image/png').split('/')[1], { type: 'image', prompt: messages[messages.length - 1].content, model, provider: p.id }); emit({ image: item.url }); }
+          if (inl) { const item = saveMedia(Buffer.from(inl.data, 'base64'), (inl.mimeType || inl.mime_type || 'image/png').split('/')[1], { type: 'image', prompt: messages[messages.length - 1].content, model, provider: p.id, owner: opts.owner }); emit({ image: item.url }); }
         }
         if (j.usageMetadata) emit({ usage: j.usageMetadata });
       } catch { }
@@ -302,7 +304,7 @@ async function streamChat(p, model, messages, opts, emit, signal) {
       if (delta.content) emit({ delta: delta.content });
       if (Array.isArray(delta.images)) for (const im of delta.images) {
         const u = im.image_url && im.image_url.url;
-        if (u) { const item = await saveFromUrlOrB64(u, { type: 'image', prompt: messages[messages.length - 1].content, model, provider: p.id }); emit({ image: item.url }); }
+        if (u) { const item = await saveFromUrlOrB64(u, { type: 'image', prompt: messages[messages.length - 1].content, model, provider: p.id, owner: opts.owner }); emit({ image: item.url }); }
       }
       if (j.usage) emit({ usage: j.usage });
     } catch (e) { if (!(e instanceof SyntaxError)) throw e; }
@@ -315,7 +317,7 @@ async function generateImage(p, model, prompt, o = {}) {
   const n = Math.max(1, Math.min(4, Number(o.n) || 1));
   const size = o.size || '1024x1024';
   const [w, h] = size.split('x').map(Number);
-  const meta = { type: 'image', prompt, model, provider: p.id, providerName: p.name };
+  const meta = { type: 'image', prompt, model, provider: p.id, providerName: p.name, owner: o.owner };
   const results = [];
   if (p.type === 'pollinations') {
     for (let i = 0; i < n; i++) {
@@ -364,9 +366,9 @@ async function generateImage(p, model, prompt, o = {}) {
 const jobs = new Map();
 async function startVideo(p, model, prompt, o = {}) {
   const base = trimSlash(p.baseUrl);
-  const job = { id: uid('v_'), status: 'queued', progress: 0, prompt, model, provider: p.id, createdAt: Date.now() };
+  const job = { id: uid('v_'), status: 'queued', progress: 0, prompt, model, provider: p.id, createdAt: Date.now(), owner: o.owner };
   jobs.set(job.id, job);
-  const meta = { type: 'video', prompt, model, provider: p.id, providerName: p.name };
+  const meta = { type: 'video', prompt, model, provider: p.id, providerName: p.name, owner: o.owner };
   const run = async () => {
     try {
       if (p.type === 'gemini') {
@@ -429,7 +431,7 @@ async function freeCatalog() {
 
 // ---------------------------------------------------------------- workspace (VS Code-like folder access)
 const LOCAL_ONLY = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
-const FS_ENABLED = process.env.DISABLE_FS !== '1' && (LOCAL_ONLY || !!APP_PASSWORD);
+const FS_ENABLED = process.env.DISABLE_FS !== '1'; // folder + terminal access is for the admin account only (checked per request)
 const WS_IGNORE = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.venv', 'venv', '__pycache__', '.idea', '.gradle', '.DS_Store', 'Thumbs.db', '.cache', 'target', 'out']);
 function wsRoot() { return db.settings.workspaceRoot || null; }
 function wsResolve(rel) {
@@ -470,7 +472,7 @@ function wsWrite(rel, content) {
   return { path: rel, created: !existed };
 }
 async function handleWs(parts, M, req, res, u) {
-  if (!FS_ENABLED) return send(res, 403, { error: 'Folder access is disabled on this server (set APP_PASSWORD when HOST is public).' });
+  if (!FS_ENABLED) return send(res, 403, { error: 'Folder access is disabled on this server (DISABLE_FS=1).' });
   const a = parts[1] || '';
   if (!a && M === 'GET') return send(res, 200, wsState());
   if (a === 'open' && M === 'POST') {
@@ -552,12 +554,42 @@ function serveStatic(res, dir, rel) {
     fs.createReadStream(fp).pipe(res);
   });
 }
-const TOKEN = APP_PASSWORD ? crypto.createHash('sha256').update('nova:' + APP_PASSWORD).digest('hex') : '';
-function authed(req) {
-  if (!APP_PASSWORD) return true;
-  const h = req.headers['authorization'] || '';
-  const c = (req.headers.cookie || '').match(/nova_token=([a-f0-9]+)/);
-  return h === 'Bearer ' + TOKEN || (c && c[1] === TOKEN);
+// ---------------------------------------------------------------- accounts / auth
+const SETUP_CODE = APP_PASSWORD || (LOCAL_ONLY ? '' : crypto.randomBytes(4).toString('hex'));
+const platformOf = req => { const h = String(req.headers['x-nova-client'] || (String(req.url).match(/[?&]client=([a-z]+)/) || [])[1] || '').toLowerCase(); return ['web', 'windows', 'android'].includes(h) ? h : 'web'; };
+function setSessionCookie(res, token) { res.setHeader('Set-Cookie', `nova_sid=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`); }
+// When an older single-user install upgrades, everything that existed becomes the admin's
+function adoptLegacyData(u) {
+  db.chats.forEach(c => { if (!c.owner) c.owner = u.id; });
+  db.media.forEach(m => { if (!m.owner) m.owner = u.id; });
+  db.prompts.forEach(p => { if (!p.owner) p.owner = u.id; });
+  const tg = db.telegramUsers || {}; Object.values(tg).forEach(x => { if (x.authed && !x.uid && Object.keys(tg).length === 1) { x.uid = u.id; u.tgId = x.id; u.tgUsername = x.username; } });
+  saveDb();
+}
+const isAdmin = u => u && u.role === 'admin';
+const visibleModels = (u, p) => (p.models || []).filter(m => isAdmin(u) || (m.enabled !== false && acc.modelAllowed(u, p.id + '::' + m.id)));
+function providersFor(u) {
+  return db.providers.filter(p => isAdmin(u) || p.enabled !== false).map(p => {
+    const o = publicProvider(p);
+    if (!isAdmin(u)) { o.apiKey = ''; o.baseUrl = ''; o.headers = {}; o.models = visibleModels(u, p); }
+    return o;
+  }).filter(p => isAdmin(u) || p.models.length);
+}
+function userSettings(u) { return Object.assign({}, db.settings, { telegram: undefined, workspaceRoot: isAdmin(u) ? db.settings.workspaceRoot : undefined }, u.prefs || {}); }
+const changed = {
+  providers: () => acc.emit('providers'),
+  chats: uidd => acc.emit('chats', c => c.uid === uidd),
+  config: () => acc.emit('config', null, publicConfig()),
+};
+function publicConfig() { const c = acc.db().config; return { announcement: c.announcement, maintenance: c.maintenance, registration: c.registration }; }
+async function addProvider(b) {
+  const preset = PRESETS.find(x => x.id === b.preset) || PRESETS.find(x => x.id === 'custom');
+  const prov = { id: uid('pv_'), preset: preset.id, name: b.name || preset.name, type: b.type || preset.type, baseUrl: trimSlash(b.baseUrl || preset.baseUrl), apiKey: (b.apiKey || '').trim(), headers: b.headers || {}, enabled: true, models: [], createdAt: Date.now() };
+  db.providers.push(prov); saveDb();
+  let fetched = null, error = null;
+  if (b.autoFetch !== false && (prov.apiKey || preset.noKey)) { try { fetched = await mergeModels(prov); } catch (e) { error = e.message; } }
+  changed.providers();
+  return { prov, fetched, error };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -568,33 +600,145 @@ const server = http.createServer(async (req, res) => {
       if (p.startsWith('/media/')) return serveStatic(res, MEDIA_DIR, decodeURIComponent(p.slice(7)));
       return serveStatic(res, PUBLIC_DIR, p === '/' ? 'index.html' : decodeURIComponent(p.slice(1)));
     }
-    if (p === '/api/login' && req.method === 'POST') {
-      const b = await readBody(req);
-      if (!APP_PASSWORD || b.password === APP_PASSWORD) { res.setHeader('Set-Cookie', `nova_token=${TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`); return send(res, 200, { ok: true }); }
-      return send(res, 401, { error: 'Wrong password' });
-    }
-    if (!authed(req)) return send(res, 401, { error: 'auth', needsLogin: true });
-    const parts = p.split('/').filter(Boolean).slice(1); // after 'api'
     const M = req.method;
+    // ---- public auth endpoints
+    if (p === '/api/auth/info' && M === 'GET') {
+      return send(res, 200, Object.assign({ setupNeeded: acc.setupNeeded(), setupCodeRequired: acc.setupNeeded() && !!SETUP_CODE, version: VERSION, lang: db.settings.lang }, publicConfig()));
+    }
+    if (p === '/api/auth/setup' && M === 'POST') {
+      if (!acc.setupNeeded()) return send(res, 400, { error: 'Admin already exists' });
+      const b = await readBody(req);
+      if (SETUP_CODE && String(b.code || '').trim() !== SETUP_CODE) return send(res, 403, { error: 'Wrong setup code' });
+      const usr = acc.createUser({ username: b.username, password: b.password, name: b.name, role: 'admin' });
+      adoptLegacyData(usr);
+      const token = acc.createSession(usr, platformOf(req), req.headers['user-agent']); setSessionCookie(res, token);
+      return send(res, 200, { ok: true, token });
+    }
+    if (p === '/api/auth/login' && M === 'POST') {
+      const b = await readBody(req);
+      const usr = acc.byName(b.username);
+      if (!acc.checkPassword(usr, b.password)) { await new Promise(r => setTimeout(r, 600)); return send(res, 401, { error: 'Wrong username or password' }); }
+      if (usr.status === 'pending') return send(res, 403, { error: 'Your account is waiting for admin approval' });
+      if (usr.status === 'banned') return send(res, 403, { error: 'Your account is disabled' });
+      const token = acc.createSession(usr, platformOf(req), req.headers['user-agent']); setSessionCookie(res, token);
+      acc.log('login', usr, { platform: platformOf(req) });
+      return send(res, 200, { ok: true, token });
+    }
+    if (p === '/api/auth/register' && M === 'POST') {
+      const mode = acc.db().config.registration;
+      if (mode === 'closed' || acc.setupNeeded()) return send(res, 403, { error: 'Registration is closed' });
+      const b = await readBody(req);
+      const usr = acc.createUser({ username: b.username, password: b.password, name: b.name, status: mode === 'approval' ? 'pending' : 'active' });
+      if (usr.status === 'pending') return send(res, 200, { ok: true, pending: true });
+      const token = acc.createSession(usr, platformOf(req), req.headers['user-agent']); setSessionCookie(res, token);
+      return send(res, 200, { ok: true, token });
+    }
+    const ctx = acc.sessionFromReq(req);
+    if (!ctx) return send(res, 401, { error: 'auth', needsLogin: true, setupNeeded: acc.setupNeeded() });
+    const me = ctx.u;
+    if (me.status !== 'active') { acc.endSession(ctx.key); return send(res, 401, { error: me.status === 'pending' ? 'Your account is waiting for admin approval' : 'Your account is disabled', needsLogin: true }); }
+    const platform = platformOf(req);
+    acc.touch(ctx, platform);
+    if (p === '/api/auth/logout' && M === 'POST') { acc.endSession(ctx.key); res.setHeader('Set-Cookie', 'nova_sid=; Path=/; Max-Age=0'); return send(res, 200, { ok: true }); }
+    if (p === '/api/events' && M === 'GET') return acc.subscribe(req, res, ctx, platform);
+    if (acc.db().config.maintenance && !isAdmin(me)) return send(res, 503, { error: 'maintenance', maintenance: true, announcement: acc.db().config.announcement });
+    const parts = p.split('/').filter(Boolean).slice(1); // after 'api'
+    const adminOnly = () => { if (!isAdmin(me)) { send(res, 403, { error: 'Admin only' }); return true; } return false; };
+
+    // ---- my account
+    if (parts[0] === 'me') {
+      if (!parts[1] && M === 'GET') return send(res, 200, acc.publicUser(me, true));
+      if (!parts[1] && M === 'PUT') {
+        const b = await readBody(req);
+        if (b.name) me.name = String(b.name).slice(0, 60);
+        if (b.newPassword) { if (me.passHash && !acc.checkPassword(me, b.oldPassword)) return send(res, 400, { error: 'Current password is wrong' }); if (String(b.newPassword).length < 6) return send(res, 400, { error: 'Password must be at least 6 characters' }); acc.setPassword(me, b.newPassword); }
+        saveDb(); return send(res, 200, acc.publicUser(me, true));
+      }
+      if (parts[1] === 'telegram-code' && M === 'POST') {
+        const code = crypto.randomBytes(3).toString('hex').toUpperCase();
+        me.tgLink = { code, exp: Date.now() + 15 * 60000 }; saveDb();
+        return send(res, 200, { code, bot: bot.status().username, expiresIn: 15 });
+      }
+      if (parts[1] === 'telegram' && M === 'DELETE') { delete me.tgId; delete me.tgUsername; saveDb(); return send(res, 200, acc.publicUser(me, true)); }
+    }
+
+    // ---- admin dashboard
+    if (parts[0] === 'admin') {
+      if (adminOnly()) return;
+      const a = parts[1];
+      if (a === 'overview' && M === 'GET') {
+        const mem = process.memoryUsage();
+        return send(res, 200, Object.assign(acc.overview(), { server: { version: VERSION, uptime: process.uptime(), node: process.version, platform: process.platform, rss: mem.rss, providers: db.providers.length, models: db.providers.reduce((n, x) => n + (x.models || []).length, 0), chats: db.chats.length, media: db.media.length }, telegram: bot.status(), config: acc.db().config }));
+      }
+      if (a === 'users') {
+        if (!parts[2] && M === 'GET') return send(res, 200, acc.users().map(x => acc.publicUser(x, true)));
+        if (!parts[2] && M === 'POST') { const b = await readBody(req); const nu = acc.createUser({ username: b.username, password: b.password, name: b.name, role: b.role === 'admin' ? 'admin' : 'user' }); if (b.quota) nu.quota = b.quota; saveDb(); return send(res, 200, acc.publicUser(nu, true)); }
+        const t = acc.byId(parts[2]); if (!t) return send(res, 404, { error: 'User not found' });
+        if (M === 'PUT') {
+          const b = await readBody(req);
+          if (t.id === me.id && (b.role === 'user' || (b.status && b.status !== 'active'))) return send(res, 400, { error: 'You cannot demote or disable yourself' });
+          if (b.name !== undefined) t.name = String(b.name).slice(0, 60);
+          if (b.role) t.role = b.role === 'admin' ? 'admin' : 'user';
+          if (b.status && ['active', 'banned', 'pending'].includes(b.status)) { t.status = b.status; if (b.status !== 'active') acc.emit('logout', c => c.uid === t.id); }
+          if (b.quota !== undefined) t.quota = b.quota;
+          if (b.allowedModels !== undefined) t.allowedModels = Array.isArray(b.allowedModels) && b.allowedModels.length ? b.allowedModels : null;
+          if (b.password) { if (String(b.password).length < 6) return send(res, 400, { error: 'Password must be at least 6 characters' }); acc.setPassword(t, b.password); }
+          if (b.unlinkTelegram) { delete t.tgId; delete t.tgUsername; }
+          saveDb(); acc.log('user.update', me, { target: t.username, changes: Object.keys(b).filter(k => k !== 'password') });
+          acc.emit('me', c => c.uid === t.id);
+          return send(res, 200, acc.publicUser(t, true));
+        }
+        if (M === 'DELETE') {
+          if (t.id === me.id) return send(res, 400, { error: 'You cannot delete yourself' });
+          if (u.searchParams.get('data') === '1') { db.chats = db.chats.filter(c => c.owner !== t.id); db.media.filter(m => m.owner === t.id).forEach(m => { try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { } }); db.media = db.media.filter(m => m.owner !== t.id); }
+          acc.deleteUser(t.id); acc.log('user.delete', me, { target: t.username }); return send(res, 200, { ok: true });
+        }
+      }
+      if (a === 'sessions') {
+        if (M === 'GET') return send(res, 200, acc.listSessions());
+        if (M === 'DELETE' && parts[2]) { acc.revokeSession(parts[2]); return send(res, 200, { ok: true }); }
+      }
+      if (a === 'config' && M === 'PUT') {
+        const b = await readBody(req); const c = acc.db().config;
+        if (['closed', 'open', 'approval'].includes(b.registration)) c.registration = b.registration;
+        if (b.defaultQuota) c.defaultQuota = { msgs: Math.max(0, +b.defaultQuota.msgs || 0), images: Math.max(0, +b.defaultQuota.images || 0), videos: Math.max(0, +b.defaultQuota.videos || 0) };
+        if (typeof b.announcement === 'string') c.announcement = b.announcement.slice(0, 500);
+        if (typeof b.maintenance === 'boolean') c.maintenance = b.maintenance;
+        if (typeof b.systemPrompt === 'string') db.settings.systemPrompt = b.systemPrompt;
+        saveDb(); changed.config(); acc.log('config', me, { keys: Object.keys(b) });
+        return send(res, 200, c);
+      }
+      if (a === 'activity' && M === 'GET') return send(res, 200, acc.db().activity.slice(0, 200));
+      if (a === 'broadcast' && M === 'POST') {
+        const b = await readBody(req); const text = String(b.text || '').trim(); if (!text) return send(res, 400, { error: 'Text required' });
+        let tg = { sent: 0 };
+        if (b.telegram !== false) tg = await bot.broadcast(text);
+        if (b.app !== false) { acc.emit('notice', null, { text }); }
+        acc.log('broadcast', me, { telegram: tg.sent });
+        return send(res, 200, { ok: true, telegram: tg });
+      }
+    }
 
     // ---- state
     if (parts[0] === 'state' && M === 'GET') {
-      return send(res, 200, { fsEnabled: FS_ENABLED, platform: process.platform, settings: Object.assign({}, db.settings, { telegram: undefined }), providers: db.providers.map(publicProvider), presets: PRESETS, prompts: db.prompts, chats: db.chats.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned, model: c.model, wsRoot: c.wsRoot })), mediaCount: db.media.length });
+      return send(res, 200, { fsEnabled: FS_ENABLED && isAdmin(me), platform: process.platform, version: VERSION, me: acc.publicUser(me, true), config: publicConfig(), settings: userSettings(me), providers: providersFor(me), presets: isAdmin(me) ? PRESETS : [], prompts: db.prompts.filter(x => !x.owner || x.owner === me.id || isAdmin(acc.byId(x.owner))), chats: db.chats.filter(c => c.owner === me.id).map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned, model: c.model, wsRoot: c.wsRoot, source: c.source })), mediaCount: db.media.filter(m => m.owner === me.id).length });
     }
-    if (parts[0] === 'settings' && M === 'PUT') { const b = await readBody(req); delete b.telegram; Object.assign(db.settings, b); saveDb(); return send(res, 200, Object.assign({}, db.settings, { telegram: undefined })); }
+    if (parts[0] === 'settings' && M === 'PUT') {
+      const b = await readBody(req); delete b.telegram; delete b.workspaceRoot;
+      me.prefs = Object.assign(me.prefs || {}, b);
+      if (isAdmin(me) && b.systemPrompt !== undefined) db.settings.systemPrompt = b.systemPrompt;
+      if (isAdmin(me) && b.lang) db.settings.lang = b.lang;
+      saveDb(); return send(res, 200, userSettings(me));
+    }
 
     // ---- providers
     if (parts[0] === 'providers') {
+      if (M === 'GET' && !parts[1]) return send(res, 200, providersFor(me));
+      if (adminOnly()) return;
       if (!parts[1] && M === 'POST') {
-        const b = await readBody(req);
-        const preset = PRESETS.find(x => x.id === b.preset) || PRESETS.find(x => x.id === 'custom');
-        const prov = { id: uid('pv_'), preset: preset.id, name: b.name || preset.name, type: b.type || preset.type, baseUrl: trimSlash(b.baseUrl || preset.baseUrl), apiKey: (b.apiKey || '').trim(), headers: b.headers || {}, enabled: true, models: [], createdAt: Date.now() };
-        db.providers.push(prov); saveDb();
-        let fetched = null, error = null;
-        if (b.autoFetch !== false && (prov.apiKey || preset.noKey)) {
-          try { fetched = await mergeModels(prov); } catch (e) { error = e.message; }
-        }
-        return send(res, 200, { provider: publicProvider(prov), fetched, error });
+        const r = await addProvider(await readBody(req));
+        acc.log('provider.add', me, { name: r.prov.name, platform });
+        return send(res, 200, { provider: publicProvider(r.prov), fetched: r.fetched, error: r.error });
       }
       const prov = providerById(parts[1]);
       if (!prov) return send(res, 404, { error: 'Provider not found' });
@@ -604,12 +748,12 @@ const server = http.createServer(async (req, res) => {
           ['name', 'baseUrl', 'type', 'enabled', 'headers', 'defaultModel'].forEach(k => { if (b[k] !== undefined) prov[k] = k === 'baseUrl' ? trimSlash(b[k]) : b[k]; });
           if (b.apiKey && !b.apiKey.includes('••••')) prov.apiKey = b.apiKey.trim();
           if (b.apiKey === '') prov.apiKey = '';
-          saveDb(); return send(res, 200, { provider: publicProvider(prov) });
+          saveDb(); changed.providers(); return send(res, 200, { provider: publicProvider(prov) });
         }
-        if (M === 'DELETE') { db.providers = db.providers.filter(x => x.id !== prov.id); saveDb(); return send(res, 200, { ok: true }); }
+        if (M === 'DELETE') { db.providers = db.providers.filter(x => x.id !== prov.id); saveDb(); changed.providers(); acc.log('provider.delete', me, { name: prov.name }); return send(res, 200, { ok: true }); }
       }
       if (parts[2] === 'fetch-models' && M === 'POST') {
-        const r = await mergeModels(prov);
+        const r = await mergeModels(prov); changed.providers();
         return send(res, 200, { provider: publicProvider(prov), fetched: r });
       }
       if (parts[2] === 'test' && M === 'POST') {
@@ -638,12 +782,13 @@ const server = http.createServer(async (req, res) => {
         } else if (b.action === 'redetect') {
           prov.models.forEach(m => { if (!m.manual) m.caps = detectCaps(m.id); });
         }
-        saveDb(); return send(res, 200, { provider: publicProvider(prov) });
+        saveDb(); changed.providers(); return send(res, 200, { provider: publicProvider(prov) });
       }
     }
 
     // ---- live capability probe
     if (parts[0] === 'probe' && M === 'POST') {
+      if (adminOnly()) return;
       const b = await readBody(req);
       const prov = providerById(b.providerId); if (!prov) return send(res, 404, { error: 'Provider not found' });
       const m = prov.models.find(x => x.id === b.modelId);
@@ -669,46 +814,49 @@ const server = http.createServer(async (req, res) => {
     if (parts[0] === 'chat' && parts[1] === 'stream' && M === 'POST') {
       const b = await readBody(req);
       const prov = providerById(b.providerId); if (!prov) return send(res, 404, { error: 'Provider not found' });
+      try { acc.consume(me, 'msg', platform, prov.id + '::' + b.modelId); } catch (e) { return send(res, 429, { error: e.message }); }
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
       const ctrl = new AbortController();
       res.on('close', () => ctrl.abort());
       const emit = o => { if (!res.writableEnded) res.write('data: ' + JSON.stringify(o) + '\n\n'); };
       const t0 = Date.now();
       try {
-        await streamChat(prov, b.modelId, b.messages || [], { system: b.system, temperature: b.temperature, wantsImage: b.wantsImage }, emit, ctrl.signal);
+        await streamChat(prov, b.modelId, b.messages || [], { system: b.system, temperature: b.temperature, wantsImage: b.wantsImage, owner: me.id }, emit, ctrl.signal);
         emit({ done: true, ms: Date.now() - t0 });
       } catch (e) { if (e.name !== 'AbortError') emit({ error: e.message }); }
       return res.end();
     }
     if (parts[0] === 'chats') {
-      if (!parts[1] && M === 'GET') return send(res, 200, db.chats.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned })));
-      if (!parts[1] && M === 'POST') { const b = await readBody(req); const c = Object.assign({ id: uid('c_'), title: 'گفتگوی جدید', messages: [], createdAt: Date.now(), updatedAt: Date.now() }, b); db.chats.unshift(c); saveDb(); return send(res, 200, c); }
-      const c = db.chats.find(x => x.id === parts[1]); if (!c) return send(res, 404, { error: 'Chat not found' });
+      if (!parts[1] && M === 'GET') return send(res, 200, db.chats.filter(c => c.owner === me.id).map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, pinned: c.pinned, source: c.source })));
+      if (!parts[1] && M === 'POST') { const b = await readBody(req); const c = Object.assign({ id: uid('c_'), title: 'گفتگوی جدید', messages: [], createdAt: Date.now(), updatedAt: Date.now() }, b, { owner: me.id, source: platform }); db.chats.unshift(c); saveDb(); changed.chats(me.id); return send(res, 200, c); }
+      const c = db.chats.find(x => x.id === parts[1] && x.owner === me.id); if (!c) return send(res, 404, { error: 'Chat not found' });
       if (M === 'GET') return send(res, 200, c);
-      if (M === 'PUT') { const b = await readBody(req); Object.assign(c, b, { id: c.id, updatedAt: Date.now() }); saveDb(); return send(res, 200, { ok: true }); }
-      if (M === 'DELETE') { db.chats = db.chats.filter(x => x.id !== c.id); saveDb(); return send(res, 200, { ok: true }); }
+      if (M === 'PUT') { const b = await readBody(req); Object.assign(c, b, { id: c.id, owner: me.id, updatedAt: Date.now() }); saveDb(); changed.chats(me.id); return send(res, 200, { ok: true }); }
+      if (M === 'DELETE') { db.chats = db.chats.filter(x => x.id !== c.id); saveDb(); changed.chats(me.id); return send(res, 200, { ok: true }); }
     }
 
     // ---- media
     if (parts[0] === 'image' && M === 'POST') {
       const b = await readBody(req);
       const prov = providerById(b.providerId); if (!prov) return send(res, 404, { error: 'Provider not found' });
-      const items = await generateImage(prov, b.modelId, b.prompt, b);
+      try { acc.consume(me, 'image', platform, prov.id + '::' + b.modelId); } catch (e) { return send(res, 429, { error: e.message }); }
+      const items = await generateImage(prov, b.modelId, b.prompt, Object.assign({}, b, { owner: me.id }));
       return send(res, 200, { items });
     }
     if (parts[0] === 'video') {
       if (M === 'POST') {
         const b = await readBody(req);
         const prov = providerById(b.providerId); if (!prov) return send(res, 404, { error: 'Provider not found' });
-        return send(res, 200, await startVideo(prov, b.modelId, b.prompt, b));
+        try { acc.consume(me, 'video', platform, prov.id + '::' + b.modelId); } catch (e) { return send(res, 429, { error: e.message }); }
+        return send(res, 200, await startVideo(prov, b.modelId, b.prompt, Object.assign({}, b, { owner: me.id })));
       }
-      if (M === 'GET' && parts[1]) { const j = jobs.get(parts[1]); return j ? send(res, 200, j) : send(res, 404, { error: 'Job not found' }); }
-      if (M === 'GET') return send(res, 200, [...jobs.values()].reverse());
+      if (M === 'GET' && parts[1]) { const j = jobs.get(parts[1]); return j && j.owner === me.id ? send(res, 200, j) : send(res, 404, { error: 'Job not found' }); }
+      if (M === 'GET') return send(res, 200, [...jobs.values()].filter(j => j.owner === me.id).reverse());
     }
     if (parts[0] === 'media') {
-      if (M === 'GET') return send(res, 200, db.media);
+      if (M === 'GET') return send(res, 200, db.media.filter(m => m.owner === me.id));
       if (M === 'DELETE' && parts[1]) {
-        const m = db.media.find(x => x.id === parts[1]);
+        const m = db.media.find(x => x.id === parts[1] && x.owner === me.id);
         if (m) { try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { } db.media = db.media.filter(x => x.id !== m.id); saveDb(); }
         return send(res, 200, { ok: true });
       }
@@ -718,31 +866,34 @@ const server = http.createServer(async (req, res) => {
     // ---- prompts library
     if (parts[0] === 'prompts') {
       const b = M === 'GET' ? {} : await readBody(req);
-      if (M === 'POST') { db.prompts.unshift({ id: uid('p_'), title: b.title, text: b.text }); }
-      if (M === 'DELETE' && parts[1]) db.prompts = db.prompts.filter(x => x.id !== parts[1]);
-      saveDb(); return send(res, 200, db.prompts);
+      if (M === 'POST') { db.prompts.unshift({ id: uid('p_'), title: b.title, text: b.text, owner: me.id }); }
+      if (M === 'DELETE' && parts[1]) db.prompts = db.prompts.filter(x => !(x.id === parts[1] && (x.owner === me.id || isAdmin(me))));
+      saveDb(); return send(res, 200, db.prompts.filter(x => !x.owner || x.owner === me.id || isAdmin(acc.byId(x.owner))));
     }
 
-    if (parts[0] === 'ws') return await handleWs(parts, M, req, res, u);
+    if (parts[0] === 'ws') { if (adminOnly()) return; return await handleWs(parts, M, req, res, u); }
     if (parts[0] === 'telegram') {
+      if (adminOnly()) return;
       if (M === 'GET') return send(res, 200, bot.status());
       if (M === 'PUT' || M === 'POST') return send(res, 200, await bot.configure(await readBody(req)));
     }
 
     // ---- backup
     if (parts[0] === 'export' && M === 'GET') {
+      if (!isAdmin(me)) { res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="nova-ai-hub-my-chats.json"' }); return res.end(JSON.stringify({ exportedAt: new Date().toISOString(), chats: db.chats.filter(c => c.owner === me.id) }, null, 2)); }
       const full = u.searchParams.get('keys') === '1';
       const out = { exportedAt: new Date().toISOString(), settings: full ? db.settings : Object.assign({}, db.settings, { telegram: undefined }), prompts: db.prompts, providers: db.providers.map(p => full ? p : Object.assign({}, p, { apiKey: '' })), chats: db.chats };
       res.writeHead(200, { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="nova-ai-hub-backup.json"' });
       return res.end(JSON.stringify(out, null, 2));
     }
     if (parts[0] === 'import' && M === 'POST') {
+      if (adminOnly()) return;
       const b = await readBody(req);
       if (b.settings) Object.assign(db.settings, b.settings);
       if (Array.isArray(b.prompts)) db.prompts = b.prompts;
       if (Array.isArray(b.providers)) b.providers.forEach(p => { const ex = providerById(p.id); if (ex) Object.assign(ex, p, { apiKey: p.apiKey || ex.apiKey }); else db.providers.push(p); });
-      if (Array.isArray(b.chats)) b.chats.forEach(c => { if (!db.chats.find(x => x.id === c.id)) db.chats.push(c); });
-      saveDb(); return send(res, 200, { ok: true });
+      if (Array.isArray(b.chats)) b.chats.forEach(c => { if (!db.chats.find(x => x.id === c.id)) db.chats.push(Object.assign({}, c, { owner: c.owner || me.id })); });
+      saveDb(); changed.providers(); return send(res, 200, { ok: true });
     }
     send(res, 404, { error: 'Unknown endpoint' });
   } catch (e) {
@@ -773,9 +924,9 @@ async function mergeModels(prov) {
 })();
 
 // ---------------------------------------------------------------- Telegram bot (shares this server's data)
-const bot = require('./bot')({ getDb: () => db, saveDb, providerById, streamChat, generateImage, uid, MEDIA_DIR });
+const bot = require('./bot')({ getDb: () => db, saveDb, providerById, streamChat, generateImage, uid, MEDIA_DIR, acc, PRESETS, addProvider, mergeModels, changed, publicProvider });
 if (process.env.TELEGRAM_BOT_TOKEN && !(db.settings.telegram && db.settings.telegram.token)) {
-  db.settings.telegram = Object.assign({ access: process.env.TELEGRAM_ACCESS || 'password', password: process.env.TELEGRAM_PASSWORD || '' }, db.settings.telegram || {}, { token: process.env.TELEGRAM_BOT_TOKEN, enabled: true });
+  db.settings.telegram = Object.assign({ access: process.env.TELEGRAM_ACCESS || 'accounts' }, db.settings.telegram || {}, { token: process.env.TELEGRAM_BOT_TOKEN, enabled: true });
 }
 bot.start();
 
@@ -785,7 +936,7 @@ const ready = new Promise(resolve => {
   server.once('listening', () => {
     const port = server.address().port;
     console.log(`\n  ✦ Nova AI Hub running →  http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${port}\n`);
-    if (!FS_ENABLED) console.log('  (Folder/workspace access disabled: set APP_PASSWORD to enable it on a public HOST)\n');
+    if (acc.setupNeeded()) console.log(SETUP_CODE ? `  First run: open the app and create the admin account with setup code  ${SETUP_CODE}\n` : '  First run: open the app and create the admin account.\n');
     resolve(port);
   });
   server.listen(PORT, HOST);

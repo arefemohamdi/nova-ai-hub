@@ -13,7 +13,7 @@ function flatFiles(nodes, out = []) { for (const n of nodes || []) { if (n.type 
 
 // ---------------------------------------------------------------- folder dialog
 async function openFolderDialog() {
-  if (window.novaDesktop && window.novaDesktop.pickFolder) {
+  if (window.novaDesktop && window.novaDesktop.pickFolder && !window.novaDesktop.remote && S.fsEnabled) {
     const p = await window.novaDesktop.pickFolder(); if (p) await openWorkspace(p); return;
   }
   if (!S.fsEnabled) { if (window.showDirectoryPicker) return pickBrowserFolder(); toast(t('folderNotSupported'), 'bad'); return; }
