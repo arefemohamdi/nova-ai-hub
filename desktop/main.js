@@ -2,10 +2,11 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 
-if (!app.requestSingleInstanceLock()) { app.quit(); }
+if (!app.requestSingleInstanceLock()) { app.exit(0); }
 
 process.env.DATA_DIR = process.env.NOVA_DATA_DIR || path.join(app.getPath('userData'), 'data');
-process.env.PORT = process.env.NOVA_PORT || '0'; // random free port
+process.env.PORT = process.env.NOVA_PORT || '17860'; // fixed port keeps the page origin stable, so login and UI preferences survive restarts
+process.env.PORT_FALLBACK = '1';
 process.env.HOST = '127.0.0.1';
 
 let win = null;

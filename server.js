@@ -780,11 +780,14 @@ if (process.env.TELEGRAM_BOT_TOKEN && !(db.settings.telegram && db.settings.tele
 bot.start();
 
 const ready = new Promise(resolve => {
-  server.listen(PORT, HOST, () => {
+  // PORT_FALLBACK=1 (desktop app): if the preferred port is busy, take any free port instead of crashing
+  server.on('error', e => { if (e.code === 'EADDRINUSE' && process.env.PORT_FALLBACK) { console.log(`  port ${PORT} busy, using a free port`); server.listen(0, HOST); } else throw e; });
+  server.once('listening', () => {
     const port = server.address().port;
     console.log(`\n  ✦ Nova AI Hub running →  http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${port}\n`);
     if (!FS_ENABLED) console.log('  (Folder/workspace access disabled: set APP_PASSWORD to enable it on a public HOST)\n');
     resolve(port);
   });
+  server.listen(PORT, HOST);
 });
 module.exports = { detectCaps, server, ready };

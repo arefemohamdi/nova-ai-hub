@@ -56,6 +56,7 @@ async function openWorkspace(p, create) {
     toast(t('folder') + ': ' + S.ws.name, 'ok');
     await pickWorkspaceChat();
     rerenderFolderUi();
+    if (S.pendingPrompt) { const txt = S.pendingPrompt; S.pendingPrompt = null; setTimeout(() => { const ta = document.querySelector('#input'); if (ta) { ta.value = txt; onSend(); } }, 60); }
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function closeWorkspace() { S.ws = await api('/ws/close', { method: 'POST' }); S.tabs = []; S.activeTab = null; S.dir = null; rerenderFolderUi(); }

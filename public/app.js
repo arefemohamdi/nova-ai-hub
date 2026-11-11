@@ -286,12 +286,16 @@ function renderMessages() {
   const el = $('#msgs'); if (!el) return;
   const msgs = (S.chat && S.chat.messages) || [];
   if (!msgs.length) {
-    const sug = [['sparkles', 's1'], ['code', 's2'], ['globe', 's3'], ['image', 's4']];
+    const inCode = S.route === 'code';
+    const sug = inCode ? [['globe', 'cs1'], ['code', 'cs2'], ['sparkles', 'cs3'], ['file', 'cs4']] : [['sparkles', 's1'], ['code', 's2'], ['globe', 's3'], ['image', 's4']];
     el.innerHTML = `<div class="welcome"><div class="orb">${icon('sparkles')}</div><h2>${t('welcomeTitle')}</h2><p>${t('welcomeSub')}</p>
       <div class="suggest">${sug.map(([ic, k]) => `<button data-s="${k}">${icon(ic)}<span>${t(k)}</span></button>`).join('')}</div></div>`;
     $$('.suggest button', el).forEach(b => b.onclick = () => {
-      const ta = $('#input'); ta.value = t(b.dataset.s); autoGrow(ta); ta.focus();
-      if (b.dataset.s === 's4') { const im = allModels().find(m => m.caps.image && !m.caps.chat); if (im) { S.selectedKey = im.key; renderChatHead(); renderComposer(); $('#input').value = t('s4'); } }
+      const k = b.dataset.s; const text = t(k);
+      if (inCode && !hasFolder()) { S.pendingPrompt = text; toast(t('chooseFolderFirst')); return openFolderDialog(); }
+      if (k === 's4') { const im = allModels().find(m => m.caps.image && !m.caps.chat); if (im) { S.selectedKey = im.key; renderChatHead(); renderComposer(); } }
+      const ta = $('#input'); if (!ta) return; ta.value = text; autoGrow(ta); ta.focus();
+      if (k !== 's3') onSend(); // s3 (translate) needs the user's own text, so it only fills the box
     });
     return;
   }
@@ -981,10 +985,10 @@ function renderSettings() {
     <div class="section-title">${icon('telegram')} ${t('telegram')}</div>
     <div class="card" id="tgCard"><div class="dim">…</div></div>
     <div class="section-title">${icon('sparkles')} ${t('about')}</div>
-    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v1.1</div></div></div>
+    <div class="card"><div class="row"><div class="plogo" style="background:var(--grad)">${icon('sparkles')}</div><div><b>${t('appName')}</b><div class="dim">${t('tagline')} · v1.1.1</div></div></div>
     <p class="muted" style="line-height:1.9;margin-bottom:0">${t('shortcuts')}: <code>Ctrl+K</code> ${t('selectModel')} · <code>Ctrl+Shift+O</code> ${t('newChat')}</p></div></div>`;
-  $$('[data-lang]').forEach(b => b.onclick = async () => { await saveSettings({ lang: b.dataset.lang }); renderShell(); });
-  $$('[data-theme]').forEach(b => b.onclick = async () => { await saveSettings({ theme: b.dataset.theme }); renderShell(); });
+  $$('#main .seg button[data-lang]').forEach(b => b.onclick = async () => { if (S.settings.lang === b.dataset.lang) return; await saveSettings({ lang: b.dataset.lang }); renderShell(); });
+  $$('#main .seg button[data-theme]').forEach(b => b.onclick = async () => { if (S.settings.theme === b.dataset.theme) return; await saveSettings({ theme: b.dataset.theme }); renderShell(); });
   $('#defM').onclick = e => openModelPicker(e.currentTarget, { filter: 'chat', onPick: async k => { await saveSettings({ defaultModel: k }); S.selectedKey = k; renderSettings(); } });
   $('#temp').oninput = e => $('#tv').textContent = e.target.value;
   $('#temp').onchange = e => saveSettings({ temperature: +e.target.value });
