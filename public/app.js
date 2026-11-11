@@ -992,6 +992,7 @@ function renderSettings() {
     <div class="section-title">${icon('telegram')} ${t('tgLinkTitle')}</div>
     <div class="card" id="tgLink">${me.tgLinked ? `<div class="row"><span class="badge ok">● ${t('tgLinked')}</span>${me.tgUsername ? `<span dir="ltr">@${esc(me.tgUsername)}</span>` : ''}<span class="grow"></span><button class="btn" id="tgUnlink">${t('tgUnlink')}</button></div>`
       : `<p class="muted" style="margin:0 0 12px;line-height:1.9">${t('tgLinkSub')}</p><button class="btn primary" id="tgCode">${icon('key')}${t('tgGetCode')}</button><div id="tgCodeOut"></div>`}</div>
+    ${isAdmin() ? `<div class="section-title">${icon('telegram')} ${t('telegram')}</div><div class="card" id="tgCard"><div class="dim">…</div></div>` : ''}
     <div class="section-title">${icon('settings')} ${t('preferences')}</div>
     <div class="card">
       <div class="set-row"><div><b>${t('language')}</b><small>فارسی / English</small></div><div class="seg"><button data-lang="fa" class="${S.settings.lang === 'fa' ? 'active' : ''}">فارسی</button><button data-lang="en" class="${S.settings.lang === 'en' ? 'active' : ''}">English</button></div></div>
@@ -1024,6 +1025,7 @@ function renderSettings() {
   };
   if ($('#tgUnlink')) $('#tgUnlink').onclick = async () => { S.me = await api('/me/telegram', { method: 'DELETE' }); renderSettings(); };
   if ($('#chgSrv')) $('#chgSrv').onclick = () => window.NovaAndroid ? window.NovaAndroid.resetServer() : desktopConnDialog();
+  if (isAdmin()) renderTelegramCard();
   if ($('#imp')) { $('#imp').onclick = () => $('#impF').click(); $('#impF').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await api('/import', { method: 'POST', body: JSON.parse(await f.text()) }); await loadState(); toast(t('saved'), 'ok'); renderShell(); } catch (er) { toast(er.message, 'bad'); } }; }
 }
 
@@ -1186,25 +1188,38 @@ async function admAccess(el) {
     try { await api('/admin/config', { method: 'PUT', body: { registration: reg, defaultQuota: { msgs: +$('#dqM').value, images: +$('#dqI').value, videos: +$('#dqV').value }, announcement: $('#acAnn').value, maintenance: $('#acMaint').checked } }); toast(t('saved'), 'ok'); } catch (e) { toast(e.message, 'bad'); }
   };
 }
-async function admTelegram(el, st) {
-  st = st || await api('/telegram');
+async function admTelegram(el) { el.innerHTML = `<div class="card" id="tgCard"><div class="dim">…</div></div>`; renderTelegramCard(); }
+// ------------------------------------------------------------ telegram bot settings (Settings page and admin dashboard)
+async function renderTelegramCard(st) {
+  const el = $('#tgCard'); if (!el) return;
+  try { st = st || await api('/telegram'); } catch (e) { el.innerHTML = `<div class="err-box">${esc(e.message)}</div>`; return; }
   const status = st.running ? `<span class="badge ok">● ${t('tgRunning')}</span> <a class="btn sm" href="https://t.me/${esc(st.username)}" target="_blank" rel="noopener" dir="ltr">${icon('telegram')}@${esc(st.username)}</a>`
     : st.error ? `<span class="badge bad">${t('tgError')}</span> <span class="dim" dir="ltr" style="font-size:12px">${esc(st.error)}</span>` : `<span class="badge">${t('tgStopped')}</span>`;
-  el.innerHTML = `<div class="card"><p class="muted" style="margin:0 0 14px;line-height:1.9">${t('tgIntro')}</p>
-    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">${status}<span class="dim">${t('tgLinkedN', { n: st.linked || 0 })}</span></div>
+  el.innerHTML = `<p class="muted" style="margin:0 0 14px;line-height:1.9">${t('tgIntro')}</p>
+    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">${status}</div>
     <div class="set-row"><div class="grow"><b>${t('tgToken')}</b><small>${t('tgTokenHint')}</small><input class="input ltr" id="tgTok" type="password" placeholder="123456789:AA..." value="${esc(st.token)}" style="margin-top:8px"></div></div>
-    <div class="set-row"><div><b>${t('tgAccess')}</b><small>${t('tgAccessSub')}</small></div><div class="seg" id="tgAcc">${['accounts', 'open'].map(a => `<button data-v="${a}" class="${st.access === a ? 'active' : ''}">${t('tgAcc_' + a)}</button>`).join('')}</div></div>
+    <div class="set-row" style="flex-wrap:wrap;gap:10px"><div><b>${t('tgAccess')}</b></div><div class="seg" id="tgAcc" style="flex-wrap:wrap">${['accounts', 'password', 'list', 'all'].map(a => `<button data-a="${a}" class="${st.access === a ? 'active' : ''}">${t('tgAcc_' + a)}</button>`).join('')}</div></div>
+    <div class="set-row tg-opt" data-for="accounts"><div class="grow"><small style="line-height:1.9">${t('tgAccountsHint')}</small></div></div>
+    <div class="set-row tg-opt" data-for="password"><div class="grow"><b>${t('tgPass')}</b><small>${t('tgPassHint')}</small><input class="input" id="tgPass" type="password" value="${st.hasPassword ? '••••' : ''}" style="margin-top:8px"></div></div>
+    <div class="set-row tg-opt" data-for="list"><div class="grow"><b>${t('tgAllowed')}</b><small>${t('tgAllowedHint')}</small><textarea class="textarea ltr" id="tgAllowed" rows="3" style="margin-top:8px">${esc((st.allowed || []).join('\n'))}</textarea></div></div>
+    <div class="set-row"><div><b>${t('tgLimit')}</b><small>${t('tgLimitHint')}</small></div><input class="input" id="tgLimit" type="number" min="0" value="${st.dailyLimit || 0}" style="width:110px"></div>
     <details style="margin:10px 0"><summary class="dim" style="cursor:pointer">${t('advanced')}</summary><div class="set-row"><div class="grow"><b>${t('tgApiBase')}</b><small>${t('tgApiBaseHint')}</small><input class="input ltr" id="tgBase" placeholder="https://api.telegram.org" value="${esc(st.apiBase || '')}" style="margin-top:8px"></div></div></details>
-    <div class="row" style="flex-wrap:wrap"><button class="btn primary" id="tgSave">${icon('zap')}${st.enabled ? t('tgSaveRestart') : t('tgConnect')}</button>${st.enabled ? `<button class="btn" id="tgOff">${icon('stop')}${t('tgDisable')}</button>` : ''}</div>
-    <p class="dim" style="font-size:12px;line-height:1.9;margin-bottom:0">${t('tgAdminHint')}</p></div>`;
+    <div class="row" style="flex-wrap:wrap"><button class="btn primary" id="tgSave">${icon('zap')}${st.enabled ? t('tgSaveRestart') : t('tgConnect')}</button>${st.enabled ? `<button class="btn" id="tgOff">${icon('stop')}${t('tgDisable')}</button>` : ''}<button class="btn ghost" id="tgRef">${icon('refresh')}</button></div>
+    <p class="dim" style="font-size:12px;line-height:1.9;margin-bottom:0">${t('tgAdminHint')}</p>
+    ${(st.users || []).length ? `<div class="section-title" style="margin-top:20px;font-size:13px">${icon('bot')} ${t('tgUsers')} (${st.users.length})</div><div class="tg-users">${st.users.map(u => `<div class="row"><b>${esc(u.name || '—')}</b>${u.username ? `<span class="dim" dir="ltr">@${esc(u.username)}</span>` : ''}<span class="grow"></span><span class="dim" dir="ltr">${esc(u.account)}</span><code dir="ltr">${esc(u.id)}</code></div>`).join('')}</div>` : ''}`;
   let access = st.access;
-  $$('#tgAcc button', el).forEach(b => b.onclick = () => { access = b.dataset.v; $$('#tgAcc button', el).forEach(x => x.classList.toggle('active', x === b)); });
+  const showOpts = () => $$('.tg-opt', el).forEach(r => r.style.display = r.dataset.for === access ? '' : 'none');
+  showOpts();
+  $$('#tgAcc button', el).forEach(b => b.onclick = () => { access = b.dataset.a; $$('#tgAcc button', el).forEach(x => x.classList.toggle('active', x === b)); showOpts(); });
   $('#tgSave', el).onclick = async () => {
     const btn = $('#tgSave', el); btn.disabled = true; btn.innerHTML = '…';
-    try { const r = await api('/telegram', { method: 'PUT', body: { token: $('#tgTok', el).value, access, apiBase: $('#tgBase', el).value, enabled: true } }); toast(r.running ? t('tgRunning') + ' @' + r.username : (r.error || t('tgError')), r.running ? 'ok' : 'bad'); admTelegram(el, r); }
-    catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
+    try {
+      const r = await api('/telegram', { method: 'PUT', body: { token: $('#tgTok', el).value, access, password: $('#tgPass', el).value, allowed: $('#tgAllowed', el).value.split(/[\s,]+/).filter(Boolean), dailyLimit: +$('#tgLimit', el).value, apiBase: $('#tgBase', el).value, enabled: true } });
+      toast(r.running ? t('tgRunning') + ' @' + r.username : (r.error || t('tgError')), r.running ? 'ok' : 'bad'); renderTelegramCard(r);
+    } catch (e) { toast(e.message, 'bad'); btn.disabled = false; }
   };
-  if ($('#tgOff', el)) $('#tgOff', el).onclick = async () => admTelegram(el, await api('/telegram', { method: 'PUT', body: { enabled: false } }));
+  if ($('#tgOff', el)) $('#tgOff', el).onclick = async () => renderTelegramCard(await api('/telegram', { method: 'PUT', body: { enabled: false } }));
+  $('#tgRef', el).onclick = () => renderTelegramCard();
 }
 async function admActivity(el) {
   const list = await api('/admin/activity');

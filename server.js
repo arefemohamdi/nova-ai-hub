@@ -691,6 +691,7 @@ const server = http.createServer(async (req, res) => {
         if (M === 'DELETE') {
           if (t.id === me.id) return send(res, 400, { error: 'You cannot delete yourself' });
           if (u.searchParams.get('data') === '1') { db.chats = db.chats.filter(c => c.owner !== t.id); db.media.filter(m => m.owner === t.id).forEach(m => { try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { } }); db.media = db.media.filter(m => m.owner !== t.id); }
+          Object.values(db.telegramUsers || {}).forEach(x => { if (x.uid === t.id) { delete x.uid; x.passed = false; } });
           acc.deleteUser(t.id); acc.log('user.delete', me, { target: t.username }); return send(res, 200, { ok: true });
         }
       }

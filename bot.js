@@ -88,8 +88,9 @@ module.exports = function createBot(ctx) {
   const cbStore = new Map(); let cbSeq = 0; // short callback tokens
 
   const cfg = () => {
-    const db = getDb(); const c = db.settings.telegram = Object.assign({ enabled: false, token: '', access: 'accounts', apiBase: '' }, db.settings.telegram || {});
-    if (!['accounts', 'open'].includes(c.access)) c.access = c.access === 'all' ? 'open' : 'accounts'; // older versions used password/list/all
+    const db = getDb(); const c = db.settings.telegram = Object.assign({ enabled: false, token: '', access: 'accounts', password: '', allowed: [], dailyLimit: 0, apiBase: '' }, db.settings.telegram || {});
+    if (c.access === 'open') c.access = 'all';
+    if (!['accounts', 'password', 'list', 'all'].includes(c.access)) c.access = 'accounts';
     return c;
   };
   const users = () => { const db = getDb(); db.telegramUsers = db.telegramUsers || {}; return db.telegramUsers; };
@@ -162,7 +163,7 @@ module.exports = function createBot(ctx) {
   function accountFor(tu, from) {
     let u = tu.uid && acc.byId(tu.uid);
     if (!u) { u = acc.byTg(tu.id); if (u) tu.uid = u.id; }
-    if (!u && cfg().access === 'open') {
+    if (!u && cfg().access !== 'accounts' && tu.passed) {
       let name = (from.username || 'tg' + tu.id).replace(/[^a-zA-Z0-9_.\-]/g, '').slice(0, 28) || 'tg' + tu.id; if (name.length < 3) name = 'tg_' + name;
       while (acc.byName(name)) name = name.slice(0, 24) + Math.floor(Math.random() * 1000);
       const reg = acc.db().config.registration;
@@ -170,6 +171,31 @@ module.exports = function createBot(ctx) {
       tu.uid = u.id; saveDb();
     }
     return u || null;
+  }
+  // old-style bot access (password / allowed list / everyone); passing it creates a Nova account for that Telegram user
+  function passGate(tu, chatId, text) {
+    const c = cfg(); const T = TXT[tu.lang];
+    if (tu.passed || c.access === 'accounts' || acc.byTg(tu.id)) return true;
+    if (c.access === 'all') { tu.passed = true; saveDb(); return true; }
+    if (c.access === 'list') {
+      const list = (c.allowed || []).map(x => String(x).trim().replace(/^@/, '').toLowerCase());
+      if (list.includes(String(tu.id)) || (tu.username && list.includes(tu.username.toLowerCase()))) { tu.passed = true; saveDb(); return true; }
+      sendHtml(chatId, T.denied(tu.id)); return false;
+    }
+    if (!c.password) { tu.passed = true; saveDb(); return true; }
+    if (waiting.get(tu.id) === 'password' && text) {
+      tg('deleteMessage', { chat_id: chatId, message_id: currentMsgId }).catch(() => { });
+      if (text.trim() === c.password) { tu.passed = true; waiting.delete(tu.id); saveDb(); return true; }
+      sendHtml(chatId, T.wrongPass); return false;
+    }
+    waiting.set(tu.id, 'password'); sendHtml(chatId, T.needPass); return false;
+  }
+  function underLimit(tu) {
+    const lim = Number(cfg().dailyLimit) || 0; if (!lim || (curUser && curUser.role === 'admin')) return true;
+    const day = new Date().toISOString().slice(0, 10);
+    if (tu.day !== day) { tu.day = day; tu.count = 0; }
+    if ((tu.count || 0) >= lim) return false;
+    tu.count = (tu.count || 0) + 1; saveDb(); return true;
   }
   function gate(tu, u, chatId) {
     const T = TXT[tu.lang];
@@ -241,6 +267,7 @@ module.exports = function createBot(ctx) {
   async function doChat(u, chatId, text, attachments) {
     const T = TXT[u.lang];
     const mm = chatModel(u); if (!mm) return sendHtml(chatId, T.noModels);
+    if (!underLimit(u)) return sendHtml(chatId, T.limit(cfg().dailyLimit));
     if (!spend(curUser, 'msg', mm.key, chatId, u)) return;
     const c = novaChat(u, text);
     c.messages.push({ id: uid(), role: 'user', content: text || '', attachments, ts: Date.now(), via: 'telegram' });
@@ -281,6 +308,7 @@ module.exports = function createBot(ctx) {
   async function doImage(u, chatId, prompt) {
     const T = TXT[u.lang];
     const im = imageModel(u); if (!im) return sendHtml(chatId, T.noImageModel);
+    if (!underLimit(u)) return sendHtml(chatId, T.limit(cfg().dailyLimit));
     if (!spend(curUser, 'image', im.key, chatId, u)) return;
     const ph = await tg('sendMessage', { chat_id: chatId, text: T.making });
     tg('sendChatAction', { chat_id: chatId, action: 'upload_photo' }).catch(() => { });
@@ -310,7 +338,10 @@ module.exports = function createBot(ctx) {
     if (text === '/id') return sendHtml(chatId, `<code>${u.id}</code>`);
     if (msg.chat.type !== 'private') return; // the bot answers in private chats only
     if (await linkCommands(u, msg.from, chatId, text)) return;
+    const wasWaitingPass = waiting.get(u.id) === 'password';
+    if (!passGate(u, chatId, text)) return;
     const account = accountFor(u, msg.from); curUser = account;
+    if (wasWaitingPass && account) { sendHtml(chatId, T().passOk + '\n\n' + T().welcome(esc(u.name)), { reply_markup: keyboard(u) }); return; }
     if (!gate(u, account, chatId)) return;
     acc.seen(account, 'telegram');
     if (await adminMessage(u, account, chatId, text, msg)) return;
@@ -485,12 +516,15 @@ module.exports = function createBot(ctx) {
   function stop() { st.running = false; st.loopId++; try { st.ctrl && st.ctrl.abort(); } catch { } }
   function status() {
     const c = cfg();
-    return { enabled: !!c.enabled, hasToken: !!c.token, token: c.token ? c.token.slice(0, 6) + '••••' + c.token.slice(-4) : '', access: c.access, apiBase: c.apiBase || '', running: st.running, username: st.username, error: st.error, startedAt: st.startedAt, linked: acc.users().filter(x => x.tgId).length };
+    return { enabled: !!c.enabled, hasToken: !!c.token, token: c.token ? c.token.slice(0, 6) + '••••' + c.token.slice(-4) : '', access: c.access, hasPassword: !!c.password, allowed: c.allowed || [], dailyLimit: c.dailyLimit || 0, apiBase: c.apiBase || '', running: st.running, username: st.username, error: st.error, startedAt: st.startedAt, linked: acc.users().filter(x => x.tgId).length, users: acc.users().filter(x => x.tgId).map(x => ({ id: x.tgId, name: x.name, username: x.tgUsername || '', account: x.username })) };
   }
   async function configure(b) {
     const c = cfg();
     if (typeof b.token === 'string' && !b.token.includes('••')) c.token = b.token.trim();
-    if (['accounts', 'open'].includes(b.access)) c.access = b.access;
+    if (['accounts', 'password', 'list', 'all'].includes(b.access)) c.access = b.access;
+    if (typeof b.password === 'string' && b.password !== '••••') c.password = b.password;
+    if (Array.isArray(b.allowed)) c.allowed = b.allowed.map(x => String(x).trim()).filter(Boolean);
+    if (b.dailyLimit !== undefined) c.dailyLimit = Math.max(0, Number(b.dailyLimit) || 0);
     if (typeof b.apiBase === 'string') c.apiBase = b.apiBase.trim();
     if (typeof b.enabled === 'boolean') c.enabled = b.enabled;
     saveDb();
